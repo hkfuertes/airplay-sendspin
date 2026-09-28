@@ -2,6 +2,12 @@ package bridge
 
 import "testing"
 
+func TestAirPlayTargetName(t *testing.T) {
+	if got := airPlayTargetName("Cocina"); got != "Cocina (Sendspin)" {
+		t.Fatalf("target name = %q", got)
+	}
+}
+
 func TestVirtualMACIsStableAndLocallyAdministered(t *testing.T) {
 	first := virtualMAC("kitchen._sendspin._tcp.local.")
 	if first != virtualMAC("kitchen._sendspin._tcp.local.") {

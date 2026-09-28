@@ -7,7 +7,6 @@
 #include "raop_server.h"
 #include "cross_log.h"
 
-// [DEBUG-a4f2] Temporary RTSP lifecycle logging for the live AirPlay setup failure.
 log_level raop_loglevel = lINFO;
 log_level util_loglevel = lWARN;
 

@@ -7,7 +7,8 @@ services:
       - .:/src
       - go-build:/root/.cache/go-build
       - go-mod:/go/pkg/mod
-    command: go test ./...
+    command: go run ./cmd/goplay2-sendspin -config config.xml
+    restart: unless-stopped
 
 volumes:
   go-build:

@@ -7,7 +7,8 @@ Sendspin session.
 ```sh
 git clone --recurse-submodules https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
-docker compose run --rm bridge go run ./cmd/goplay2-sendspin -config config.xml
+docker compose up -d
+# Tests: docker compose run --rm bridge go test ./...
 ```
 
 ## `config.xml`
@@ -29,7 +30,8 @@ manual edit.
 ```
 
 - `id` is a stable, human-readable config key; `client_id` is the Sendspin
-  identity, never the friendly name.
+  identity, never the friendly name. AirPlay advertises `airplay_name` as
+  `Name (Sendspin)` to distinguish these targets.
 - `direction="outbound"`: bridge discovers and dials `_sendspin._tcp`.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.

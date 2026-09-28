@@ -227,7 +227,7 @@ index 57f0c26..5409cea 100644
  	role := NewPlayerRole(PlayerRoleConfig{
  		SampleRate: 48000,
 diff --git a/pkg/sendspin/server.go b/pkg/sendspin/server.go
-index 390695e..718f6b8 100644
+index 390695e..b1a3c40 100644
 --- a/pkg/sendspin/server.go
 +++ b/pkg/sendspin/server.go
 @@ -30,9 +30,32 @@ type ServerConfig struct {
@@ -493,14 +493,10 @@ index 390695e..718f6b8 100644
  }
  
  func (s *Server) Stop() {
-@@ -384,6 +528,43 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
+@@ -384,6 +528,39 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
  	}
  
  	log.Printf("Client hello: %s (ID: %s, Roles: %v)", hello.Name, hello.ClientID, hello.SupportedRoles)
-+	if s.config.Debug {
-+		log.Printf("[DEBUG-a4f2] hello: %s", data)
-+		log.Printf("[DEBUG-a4f2] capabilities: %+v", hello.PlayerV1Support)
-+	}
 +	// Reject a duplicate before callbacks can reset or allocate a per-client
 +	// source. The later locked check still closes the small race window.
 +	s.clientsMu.RLock()
@@ -537,7 +533,7 @@ index 390695e..718f6b8 100644
  
  	c := &ServerClient{
  		id:           hello.ClientID,
-@@ -391,6 +572,8 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
+@@ -391,6 +568,8 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
  		conn:         conn,
  		roles:        hello.SupportedRoles,
  		capabilities: hello.PlayerV1Support,
@@ -568,7 +564,7 @@ index d3f93a6..baf33a5 100644
  	sendChan chan interface{}
  	done     chan struct{}
 diff --git a/pkg/sendspin/server_dispatch.go b/pkg/sendspin/server_dispatch.go
-index 3f10cbb..e48bc64 100644
+index 3f10cbb..9bc203e 100644
 --- a/pkg/sendspin/server_dispatch.go
 +++ b/pkg/sendspin/server_dispatch.go
 @@ -39,6 +39,11 @@ func (s *Server) handleClientMessage(c *ServerClient, data []byte) {
@@ -583,16 +579,6 @@ index 3f10cbb..e48bc64 100644
  
  	timeData, err := json.Marshal(payload)
  	if err != nil {
-@@ -57,6 +62,9 @@ func (s *Server) handleTimeSync(c *ServerClient, payload interface{}) {
- 		ServerReceived:    serverRecv,
- 		ServerTransmitted: serverSend,
- 	}
-+	if s.config.Debug {
-+		log.Printf("[DEBUG-a4f2] time sync %s: client=%d recv=%d send=%d", c.name, clientTime.ClientTransmitted, serverRecv, serverSend)
-+	}
- 
- 	if err := c.Send("server/time", response); err != nil {
- 		if s.config.Debug {
 diff --git a/pkg/sendspin/server_stream.go b/pkg/sendspin/server_stream.go
 index fc7927b..ab1e2c6 100644
 --- a/pkg/sendspin/server_stream.go

@@ -23,6 +23,7 @@ const (
 	defaultPortRange  = 10
 	defaultServerPort = 8927
 	defaultServerName = "AirPlay Sendspin"
+	airPlaySuffix     = " (Sendspin)"
 )
 
 type Config struct {
@@ -346,8 +347,9 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, rememb
 		return nil, err
 	}
 	mac := virtualMAC(speaker.ID)
+	airPlayName := airPlayTargetName(speaker.AirPlayName)
 	receiver, err := raop.New(raop.Config{
-		Name:      speaker.AirPlayName,
+		Name:      airPlayName,
 		MAC:       mac,
 		Host:      ip,
 		PortBase:  speaker.Port,
@@ -361,7 +363,7 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, rememb
 	}
 	t.receiver = receiver
 
-	advertiser, err := airplay.Advertise(speaker.AirPlayName, mac, ip, receiver.Port())
+	advertiser, err := airplay.Advertise(airPlayName, mac, ip, receiver.Port())
 	if err != nil {
 		receiver.Close()
 		_ = pipeline.Close()
@@ -480,6 +482,8 @@ func (e endpoint) clientInfo(name string) discovery.ClientInfo {
 func validClientInfo(info discovery.ClientInfo) bool {
 	return info.Name != "" && info.Host != "" && info.Port > 0
 }
+
+func airPlayTargetName(name string) string { return name + airPlaySuffix }
 
 func virtualMAC(key string) [6]byte {
 	sum := sha256.Sum256([]byte(key))
