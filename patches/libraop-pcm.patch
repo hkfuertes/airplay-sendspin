@@ -1,0 +1,298 @@
+diff --git a/src/raop_server.c b/src/raop_server.c
+index ab4610c..66cedf4 100644
+--- a/src/raop_server.c
++++ b/src/raop_server.c
+@@ -49,6 +49,7 @@ typedef struct raopsr_s {
+ 	struct raopst_s *ht;
+ 	raopsr_cb_t	raop_cb;
+ 	raop_http_cb_t http_cb;
++	raopsr_pcm_cb_t pcm_cb;
+ 	raopsr_metadata_t metadata;
+ 	bool flushedArtwork;
+ 	int sequence;
+@@ -152,7 +153,7 @@ struct raopsr_s *raopsr_create(struct in_addr host, struct mdnsd *svr, char *nam
+ 	if (strlen(id) > 63) id[63] = '\0';
+ 
+ 	ctx->svr = svr;
+-	ctx->svc = mdnsd_register_svc(svr, id, "_raop._tcp.local", ctx->port, NULL, (const char**) txt);
++	if (svr) ctx->svc = mdnsd_register_svc(svr, id, "_raop._tcp.local", ctx->port, NULL, (const char**) txt);
+ 
+ 	free(txt[0]);
+ 	free(id);
+@@ -170,7 +171,7 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
+ 					"ss=16", "sr=44100", "vn=3", "txtvers=1",
+ 					NULL };
+ 
+-	if (!ctx) return;
++	if (!ctx || !ctx->svr) return;
+ 
+ 	mdns_service_remove(ctx->svr, ctx->svc);
+ 
+@@ -189,6 +190,16 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
+ 	free(id);
+ }
+ 
++/*----------------------------------------------------------------------------*/
++void raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb) {
++	if (ctx) ctx->pcm_cb = pcm_cb;
++}
++
++/*----------------------------------------------------------------------------*/
++unsigned short raopsr_port(struct raopsr_s *ctx) {
++	return ctx ? ctx->port : 0;
++}
++
+ /*----------------------------------------------------------------------------*/
+ void raopsr_delete(struct raopsr_s *ctx) {
+ 	if (!ctx) return;
+@@ -218,7 +229,7 @@ void raopsr_delete(struct raopsr_s *ctx) {
+ 	NFREE(ctx->rtsp.fmtp);
+ 	free(ctx->latencies);
+ 
+-	mdns_service_remove(ctx->svr, ctx->svc);
++	if (ctx->svr && ctx->svc) mdns_service_remove(ctx->svr, ctx->svc);
+ 
+ 	free(ctx);
+ }
+@@ -508,14 +519,14 @@ static bool handle_rtsp(raopsr_t* ctx, int sock)
+ 
+ 		ht = raopst_init(ctx->host, ctx->peer, ctx->streamer.codec, ctx->streamer.metadata, ctx->drift, true, ctx->latencies,
+ 							ctx->rtsp.aeskey, ctx->rtsp.aesiv, ctx->rtsp.fmtp,
+-							cport, tport, ctx, event_cb, http_cb, ctx->ports.base,
++							cport, tport, ctx, event_cb, http_cb, ctx->pcm_cb, ctx->ports.base,
+ 							ctx->ports.range, ctx->http_length);
+ 
+ 		ctx->hport = ht.hport;
+ 		ctx->ht = ht.ctx;
+ 		ctx->flushedArtwork = true;
+ 
+-		if ((cport * tport * ht.cport * ht.tport * ht.aport * ht.hport) != 0 && ht.ctx) {
++		if ((cport * tport * ht.cport * ht.tport * ht.aport) != 0 && ht.ctx) {
+ 			char *transport;
+ 			(void) !asprintf(&transport, "RTP/AVP/UDP;unicast;mode=record;control_port=%u;timing_port=%u;server_port=%u", ht.cport, ht.tport, ht.aport);
+ 			LOG_DEBUG("[%p]: http=(%hu) audio=(%hu:%hu), timing=(%hu:%hu), control=(%hu:%hu)", ctx, ht.hport, 0, ht.aport, tport, ht.tport, cport, ht.cport);
+diff --git a/src/raop_server.h b/src/raop_server.h
+index 642fc9f..a055bbf 100644
+--- a/src/raop_server.h
++++ b/src/raop_server.h
+@@ -9,6 +9,9 @@
+ 
+ #pragma once
+ 
++#include <stddef.h>
++#include <stdint.h>
++
+ #include "cross_util.h"
+ #include "mdnssvc.h"
+ 
+@@ -22,6 +25,8 @@ typedef struct raopsr_metadata_s {
+ typedef enum { RAOP_STREAM, RAOP_PLAY, RAOP_FLUSH, RAOP_PAUSE, RAOP_STOP, RAOP_VOLUME, RAOP_METADATA, RAOP_ARTWORK } raopsr_event_t ;
+ typedef void (*raopsr_cb_t)(void *owner, raopsr_event_t event, ...);
+ typedef void (*raop_http_cb_t)(void *owner, struct key_data_s *headers, struct key_data_s *response);
++// Called from libraop's ordered frame drain, never while its audio-buffer lock is held.
++typedef void (*raopsr_pcm_cb_t)(void *owner, const int16_t *samples, size_t frames);
+ 
+ // set http_length to -3 for chunked-encoding, 0 for no content-length or to a positive value
+ struct raopsr_s* raopsr_create(struct in_addr host, struct mdnsd *svr, char *name,
+@@ -30,6 +35,10 @@ struct raopsr_s* raopsr_create(struct in_addr host, struct mdnsd *svr, char *nam
+ 						  raopsr_cb_t raop_cb, raop_http_cb_t http_cb,
+ 						  unsigned short port_base, unsigned short port_range,
+ 						  int http_length);
++// Set this before the first RTSP SETUP to receive decoded S16_LE stereo PCM
++// instead of opening libraop's HTTP re-encoder.
++void	raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb);
++unsigned short raopsr_port(struct raopsr_s *ctx);
+ void	raopsr_update(struct raopsr_s *ctx, char *name, char *model);
+ void  	raopsr_delete(struct raopsr_s *ctx);
+ void	raopsr_notify(struct raopsr_s *ctx, raopsr_event_t event, void *param);
+diff --git a/src/raop_streamer.c b/src/raop_streamer.c
+index 0ca8b46..1efb3c0 100644
+--- a/src/raop_streamer.c
++++ b/src/raop_streamer.c
+@@ -76,6 +76,9 @@ typedef struct raopst_s {
+ 	struct in_addr host, peer;
+ 	struct sockaddr_in rtp_host;
+ 	struct encoder_s* encoder;
++	raopsr_pcm_cb_t pcm_cb;
++	int16_t *pcm_copy;
++	size_t pcm_copy_size;
+ 	struct {
+ 		unsigned short rport, lport;
+ 		int sock;
+@@ -135,6 +138,7 @@ static bool 	rtp_request_timing(raopst_t *ctx);
+ static void*	rtp_thread_func(void *arg);
+ 
+ static void*	http_thread_func(void *arg);
++static void*	pcm_thread_func(void *arg);
+ static bool 	handle_http(raopst_t *ctx, int sock);
+ 
+ static int	  	seq_order(seq_t a, seq_t b);
+@@ -177,7 +181,7 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+ 								char *aeskey, char *aesiv, char *fmtpstr,
+ 								short unsigned pCtrlPort, short unsigned pTimingPort,
+ 								void *owner,
+-								raopst_cb_t event_cb, raop_http_cb_t http_cb,
++								raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb,
+ 								unsigned short port_base, unsigned short port_range,
+ 								int http_length) {
+ 	char *arg, *p;
+@@ -193,7 +197,9 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+ 
+ 	if (!ctx) return resp;
+ 	
+-	ctx->http_cache = malloc(CACHE_SIZE);
++	ctx->http_listener = -1;
++	ctx->pcm_cb = pcm_cb;
++	if (!pcm_cb) ctx->http_cache = malloc(CACHE_SIZE);
+ 	ctx->http_length = http_length;
+ 	ctx->host = host;
+ 	ctx->peer = peer;
+@@ -202,8 +208,8 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+ 	pthread_mutex_init(&ctx->ab_mutex, 0);
+ 	ctx->first_seqno = -1;
+ 
+-	// create the encoder
+-	ctx->encoder = encoder_create(codec, 44100, 2, 2, 0, &ctx->icy.interval);
++	// PCM mode bypasses the HTTP re-encoder entirely.
++	if (!pcm_cb) ctx->encoder = encoder_create(codec, 44100, 2, 2, 0, &ctx->icy.interval);
+ 
+ 	ctx->icy.enabled = metadata;
+ 	ctx->latency = atoi(latencies);
+@@ -238,6 +244,11 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+ 
+ 	ctx->frame_size = fmtp[1];
+ 	ctx->silence_frame = (char*) calloc(ctx->frame_size, 4);
++	if (pcm_cb) {
++		ctx->pcm_copy_size = ctx->frame_size * 4;
++		ctx->pcm_copy = malloc(ctx->pcm_copy_size);
++		rc &= ctx->pcm_copy != NULL;
++	}
+ 	if ((p = strchr(latencies, ':')) != NULL) {
+ 		ctx->delay = atoi(p + 1);
+ 		ctx->delay = (ctx->delay * 44100) / (ctx->frame_size * 1000);
+@@ -260,27 +271,33 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+ 		LOG_INFO("[%p]: UDP port-%d %hu", ctx, i, ctx->rtp_sockets[i].lport);
+ 	}
+ 
+-	// create http port and start listening
+-	do {
+-		resp.hport = port_base + ((port.offset + port.count++) % port_range);
+-		ctx->http_listener = bind_socket(ctx->host, &resp.hport, SOCK_STREAM);
+-	} while (ctx->http_listener < 0 && port.count < port_range);
+-
+-	int i = 128*1024;
+-	setsockopt(ctx->http_listener, SOL_SOCKET, SO_SNDBUF, (void*) &i, sizeof(i));
+-	rc &= ctx->http_listener > 0;
+-	rc &= listen(ctx->http_listener, 1) == 0;
++	// Direct PCM mode needs no HTTP listener or re-encoder.
++	if (!pcm_cb) {
++		do {
++			resp.hport = port_base + ((port.offset + port.count++) % port_range);
++			ctx->http_listener = bind_socket(ctx->host, &resp.hport, SOCK_STREAM);
++		} while (ctx->http_listener < 0 && port.count < port_range);
++
++		int i = 128*1024;
++		setsockopt(ctx->http_listener, SOL_SOCKET, SO_SNDBUF, (void*) &i, sizeof(i));
++		rc &= ctx->http_listener > 0;
++		rc &= listen(ctx->http_listener, 1) == 0;
++	}
+ 
+ 	resp.cport = ctx->rtp_sockets[CONTROL].lport;
+ 	resp.tport = ctx->rtp_sockets[TIMING].lport;
+ 	resp.aport = ctx->rtp_sockets[DATA].lport;
+ 
+-	LOG_INFO("[%p]: HTTP listening port %hu", ctx, resp.hport);
++	if (pcm_cb) {
++		LOG_INFO("[%p]: direct PCM output", ctx);
++	} else {
++		LOG_INFO("[%p]: HTTP listening port %hu", ctx, resp.hport);
++	}
+ 
+ 	if (rc) {
+ 		ctx->running = true;
+ 		pthread_create(&ctx->rtp_thread, NULL, rtp_thread_func, (void *) ctx);
+-		pthread_create(&ctx->http_thread, NULL, http_thread_func, (void *) ctx);
++		pthread_create(&ctx->http_thread, NULL, pcm_cb ? pcm_thread_func : http_thread_func, (void *) ctx);
+ 	} else {
+ 		raopst_end(ctx);
+ 		ctx = NULL;
+@@ -313,15 +330,16 @@ void raopst_end(raopst_t *ctx) {
+ 		pthread_join(ctx->http_thread, NULL);
+ 	}
+ 
+-	shutdown_socket(ctx->http_listener);
++	if (ctx->http_listener >= 0) shutdown_socket(ctx->http_listener);
+ 	for (int i = 0; i < 3; i++) if (ctx->rtp_sockets[i].sock > 0) closesocket(ctx->rtp_sockets[i].sock);
+ 
+ 	delete_alac(ctx->alac_codec);
+-	encoder_delete(ctx->encoder);
++	if (ctx->encoder) encoder_delete(ctx->encoder);
+ 
+ 	pthread_mutex_destroy(&ctx->ab_mutex);
+ 	buffer_release(ctx->audio_buffer);
+ 	free(ctx->silence_frame);
++	free(ctx->pcm_copy);
+ 	free(ctx->http_cache);
+ 	raopsr_metadata_free(&ctx->metadata);
+ 	free(ctx);
+@@ -350,7 +368,7 @@ bool raopst_flush(raopst_t *ctx, unsigned short seqno, unsigned int rtptime, boo
+ 		ctx->close_socket = true;
+ 		ctx->http_count = 0;
+ 		ctx->ab_read = ctx->ab_write + 1;
+-		encoder_close(ctx->encoder);
++		if (ctx->encoder) encoder_close(ctx->encoder);
+ 	} else {
+ 		flushed = false;
+ 	}
+@@ -932,6 +950,38 @@ int send_data(bool chunked, int sock, const void *data, int size, int flags) {
+ 	return size;
+ }
+ 
++/*---------------------------------------------------------------------------*/
++static void *pcm_thread_func(void *arg) {
++	raopst_t *ctx = (raopst_t*) arg;
++	struct timeval timeout = { 0, 0 };
++
++	while (ctx->running) {
++		int16_t *pcm;
++		size_t bytes = 0;
++		bool ready = false;
++
++		pthread_mutex_lock(&ctx->ab_mutex);
++		if ((pcm = _buffer_get_frame(ctx, &bytes)) != NULL) {
++			if (bytes <= ctx->pcm_copy_size) {
++				memcpy(ctx->pcm_copy, pcm, bytes);
++				ready = true;
++			} else {
++				LOG_ERROR("[%p]: PCM frame too large: %zu", ctx, bytes);
++			}
++			timeout.tv_usec = ctx->pause ? (ctx->frame_size * 1000000) / 44100 : 0;
++		} else {
++			timeout.tv_usec = (2 * ctx->frame_size * 1000000) / 44100;
++		}
++		pthread_mutex_unlock(&ctx->ab_mutex);
++
++		if (ready) ctx->pcm_cb(ctx->owner, ctx->pcm_copy, bytes / 4);
++		select(0, NULL, NULL, NULL, &timeout);
++	}
++
++	LOG_INFO("[%p]: terminating PCM output", ctx);
++	return NULL;
++}
++
+ /*---------------------------------------------------------------------------*/
+ static void *http_thread_func(void *arg) {
+ 	int frame_count = 0;
+diff --git a/src/raop_streamer.h b/src/raop_streamer.h
+index da75199..340c1a7 100644
+--- a/src/raop_streamer.h
++++ b/src/raop_streamer.h
+@@ -25,7 +25,7 @@ raopst_resp_t 	raopst_init(struct in_addr host, struct in_addr peer, char *codec
+ 							bool drift, bool range, char *latencies,
+ 							char *aeskey, char *aesiv, char *fmtpstr,
+ 							short unsigned pCtrlPort, short unsigned pTimingPort,
+-							void *owner, raopst_cb_t event_cb, raop_http_cb_t http_cb,
++							void *owner, raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb,
+ 							unsigned short port_base, unsigned short port_range,
+ 							int http_length);
+ void			 	raopst_end(struct raopst_s *ctx);
