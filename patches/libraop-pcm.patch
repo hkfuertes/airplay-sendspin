@@ -1,16 +1,38 @@
+diff --git a/Makefile b/Makefile
+index fc578a0..5cf71bc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -45,12 +45,15 @@ INCLUDE = -I$(VALGRIND)/memcheck -I$(VALGRIND)/include \
+ CURVE25519_SOURCES = curve25519_dh.c curve25519_mehdi.c curve25519_order.c curve25519_utils.c custom_blind.c\
+                      ed25519_sign.c ed25519_verify.c \		  
+ 
++SUPPORT_SOURCES = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c
++
+ SOURCES = raop_client.c rtsp_client.c \
+ 	  raop_server.c raop_streamer.c \
+ 	  aes.c aes_ctr.c \
+ 	  dmap_parser.c	\
+ 	  alac.c \
+-	  bplist.cpp pairing.cpp password.c
++	  bplist.cpp pairing.cpp password.c \
++	  $(SUPPORT_SOURCES)
+ 		  
+ SOURCES_BIN = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c cliraop.c 		  
+ 		  
 diff --git a/src/raop_server.c b/src/raop_server.c
-index ab4610c..66cedf4 100644
+index ab4610c..d3a634b 100644
 --- a/src/raop_server.c
 +++ b/src/raop_server.c
-@@ -49,6 +49,7 @@ typedef struct raopsr_s {
+@@ -49,6 +49,8 @@ typedef struct raopsr_s {
  	struct raopst_s *ht;
  	raopsr_cb_t	raop_cb;
  	raop_http_cb_t http_cb;
 +	raopsr_pcm_cb_t pcm_cb;
++	void *pcm_owner;
  	raopsr_metadata_t metadata;
  	bool flushedArtwork;
  	int sequence;
-@@ -152,7 +153,7 @@ struct raopsr_s *raopsr_create(struct in_addr host, struct mdnsd *svr, char *nam
+@@ -152,7 +154,7 @@ struct raopsr_s *raopsr_create(struct in_addr host, struct mdnsd *svr, char *nam
  	if (strlen(id) > 63) id[63] = '\0';
  
  	ctx->svr = svr;
@@ -19,7 +41,7 @@ index ab4610c..66cedf4 100644
  
  	free(txt[0]);
  	free(id);
-@@ -170,7 +171,7 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
+@@ -170,7 +172,7 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
  					"ss=16", "sr=44100", "vn=3", "txtvers=1",
  					NULL };
  
@@ -28,13 +50,16 @@ index ab4610c..66cedf4 100644
  
  	mdns_service_remove(ctx->svr, ctx->svc);
  
-@@ -189,6 +190,16 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
+@@ -189,6 +191,19 @@ void raopsr_update(struct raopsr_s *ctx, char *name, char *model) {
  	free(id);
  }
  
 +/*----------------------------------------------------------------------------*/
-+void raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb) {
-+	if (ctx) ctx->pcm_cb = pcm_cb;
++void raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb, void *pcm_owner) {
++	if (ctx) {
++		ctx->pcm_cb = pcm_cb;
++		ctx->pcm_owner = pcm_owner;
++	}
 +}
 +
 +/*----------------------------------------------------------------------------*/
@@ -45,7 +70,7 @@ index ab4610c..66cedf4 100644
  /*----------------------------------------------------------------------------*/
  void raopsr_delete(struct raopsr_s *ctx) {
  	if (!ctx) return;
-@@ -218,7 +229,7 @@ void raopsr_delete(struct raopsr_s *ctx) {
+@@ -218,7 +233,7 @@ void raopsr_delete(struct raopsr_s *ctx) {
  	NFREE(ctx->rtsp.fmtp);
  	free(ctx->latencies);
  
@@ -54,12 +79,12 @@ index ab4610c..66cedf4 100644
  
  	free(ctx);
  }
-@@ -508,14 +519,14 @@ static bool handle_rtsp(raopsr_t* ctx, int sock)
+@@ -508,14 +523,14 @@ static bool handle_rtsp(raopsr_t* ctx, int sock)
  
  		ht = raopst_init(ctx->host, ctx->peer, ctx->streamer.codec, ctx->streamer.metadata, ctx->drift, true, ctx->latencies,
  							ctx->rtsp.aeskey, ctx->rtsp.aesiv, ctx->rtsp.fmtp,
 -							cport, tport, ctx, event_cb, http_cb, ctx->ports.base,
-+							cport, tport, ctx, event_cb, http_cb, ctx->pcm_cb, ctx->ports.base,
++							cport, tport, ctx, event_cb, http_cb, ctx->pcm_cb, ctx->pcm_owner, ctx->ports.base,
  							ctx->ports.range, ctx->http_length);
  
  		ctx->hport = ht.hport;
@@ -72,7 +97,7 @@ index ab4610c..66cedf4 100644
  			(void) !asprintf(&transport, "RTP/AVP/UDP;unicast;mode=record;control_port=%u;timing_port=%u;server_port=%u", ht.cport, ht.tport, ht.aport);
  			LOG_DEBUG("[%p]: http=(%hu) audio=(%hu:%hu), timing=(%hu:%hu), control=(%hu:%hu)", ctx, ht.hport, 0, ht.aport, tport, ht.tport, cport, ht.cport);
 diff --git a/src/raop_server.h b/src/raop_server.h
-index 642fc9f..a055bbf 100644
+index 642fc9f..5613516 100644
 --- a/src/raop_server.h
 +++ b/src/raop_server.h
 @@ -9,6 +9,9 @@
@@ -100,26 +125,27 @@ index 642fc9f..a055bbf 100644
  						  int http_length);
 +// Set this before the first RTSP SETUP to receive decoded S16_LE stereo PCM
 +// instead of opening libraop's HTTP re-encoder.
-+void	raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb);
++void	raopsr_set_pcm_callback(struct raopsr_s *ctx, raopsr_pcm_cb_t pcm_cb, void *pcm_owner);
 +unsigned short raopsr_port(struct raopsr_s *ctx);
  void	raopsr_update(struct raopsr_s *ctx, char *name, char *model);
  void  	raopsr_delete(struct raopsr_s *ctx);
  void	raopsr_notify(struct raopsr_s *ctx, raopsr_event_t event, void *param);
 diff --git a/src/raop_streamer.c b/src/raop_streamer.c
-index 0ca8b46..1efb3c0 100644
+index 0ca8b46..fe3c854 100644
 --- a/src/raop_streamer.c
 +++ b/src/raop_streamer.c
-@@ -76,6 +76,9 @@ typedef struct raopst_s {
+@@ -76,6 +76,10 @@ typedef struct raopst_s {
  	struct in_addr host, peer;
  	struct sockaddr_in rtp_host;
  	struct encoder_s* encoder;
 +	raopsr_pcm_cb_t pcm_cb;
++	void *pcm_owner;
 +	int16_t *pcm_copy;
 +	size_t pcm_copy_size;
  	struct {
  		unsigned short rport, lport;
  		int sock;
-@@ -135,6 +138,7 @@ static bool 	rtp_request_timing(raopst_t *ctx);
+@@ -135,6 +139,7 @@ static bool 	rtp_request_timing(raopst_t *ctx);
  static void*	rtp_thread_func(void *arg);
  
  static void*	http_thread_func(void *arg);
@@ -127,27 +153,28 @@ index 0ca8b46..1efb3c0 100644
  static bool 	handle_http(raopst_t *ctx, int sock);
  
  static int	  	seq_order(seq_t a, seq_t b);
-@@ -177,7 +181,7 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+@@ -177,7 +182,7 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
  								char *aeskey, char *aesiv, char *fmtpstr,
  								short unsigned pCtrlPort, short unsigned pTimingPort,
  								void *owner,
 -								raopst_cb_t event_cb, raop_http_cb_t http_cb,
-+								raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb,
++								raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb, void *pcm_owner,
  								unsigned short port_base, unsigned short port_range,
  								int http_length) {
  	char *arg, *p;
-@@ -193,7 +197,9 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+@@ -193,7 +198,10 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
  
  	if (!ctx) return resp;
  	
 -	ctx->http_cache = malloc(CACHE_SIZE);
 +	ctx->http_listener = -1;
 +	ctx->pcm_cb = pcm_cb;
++	ctx->pcm_owner = pcm_owner;
 +	if (!pcm_cb) ctx->http_cache = malloc(CACHE_SIZE);
  	ctx->http_length = http_length;
  	ctx->host = host;
  	ctx->peer = peer;
-@@ -202,8 +208,8 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+@@ -202,8 +210,8 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
  	pthread_mutex_init(&ctx->ab_mutex, 0);
  	ctx->first_seqno = -1;
  
@@ -158,7 +185,7 @@ index 0ca8b46..1efb3c0 100644
  
  	ctx->icy.enabled = metadata;
  	ctx->latency = atoi(latencies);
-@@ -238,6 +244,11 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+@@ -238,6 +246,11 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
  
  	ctx->frame_size = fmtp[1];
  	ctx->silence_frame = (char*) calloc(ctx->frame_size, 4);
@@ -170,7 +197,7 @@ index 0ca8b46..1efb3c0 100644
  	if ((p = strchr(latencies, ':')) != NULL) {
  		ctx->delay = atoi(p + 1);
  		ctx->delay = (ctx->delay * 44100) / (ctx->frame_size * 1000);
-@@ -260,27 +271,33 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
+@@ -260,27 +273,33 @@ raopst_resp_t raopst_init(struct in_addr host, struct in_addr peer, char *codec,
  		LOG_INFO("[%p]: UDP port-%d %hu", ctx, i, ctx->rtp_sockets[i].lport);
  	}
  
@@ -216,7 +243,7 @@ index 0ca8b46..1efb3c0 100644
  	} else {
  		raopst_end(ctx);
  		ctx = NULL;
-@@ -313,15 +330,16 @@ void raopst_end(raopst_t *ctx) {
+@@ -313,15 +332,16 @@ void raopst_end(raopst_t *ctx) {
  		pthread_join(ctx->http_thread, NULL);
  	}
  
@@ -235,7 +262,7 @@ index 0ca8b46..1efb3c0 100644
  	free(ctx->http_cache);
  	raopsr_metadata_free(&ctx->metadata);
  	free(ctx);
-@@ -350,7 +368,7 @@ bool raopst_flush(raopst_t *ctx, unsigned short seqno, unsigned int rtptime, boo
+@@ -350,7 +370,7 @@ bool raopst_flush(raopst_t *ctx, unsigned short seqno, unsigned int rtptime, boo
  		ctx->close_socket = true;
  		ctx->http_count = 0;
  		ctx->ab_read = ctx->ab_write + 1;
@@ -244,7 +271,7 @@ index 0ca8b46..1efb3c0 100644
  	} else {
  		flushed = false;
  	}
-@@ -932,6 +950,38 @@ int send_data(bool chunked, int sock, const void *data, int size, int flags) {
+@@ -932,6 +952,38 @@ int send_data(bool chunked, int sock, const void *data, int size, int flags) {
  	return size;
  }
  
@@ -272,7 +299,7 @@ index 0ca8b46..1efb3c0 100644
 +		}
 +		pthread_mutex_unlock(&ctx->ab_mutex);
 +
-+		if (ready) ctx->pcm_cb(ctx->owner, ctx->pcm_copy, bytes / 4);
++		if (ready) ctx->pcm_cb(ctx->pcm_owner, ctx->pcm_copy, bytes / 4);
 +		select(0, NULL, NULL, NULL, &timeout);
 +	}
 +
@@ -284,7 +311,7 @@ index 0ca8b46..1efb3c0 100644
  static void *http_thread_func(void *arg) {
  	int frame_count = 0;
 diff --git a/src/raop_streamer.h b/src/raop_streamer.h
-index da75199..340c1a7 100644
+index da75199..2449581 100644
 --- a/src/raop_streamer.h
 +++ b/src/raop_streamer.h
 @@ -25,7 +25,7 @@ raopst_resp_t 	raopst_init(struct in_addr host, struct in_addr peer, char *codec
@@ -292,7 +319,7 @@ index da75199..340c1a7 100644
  							char *aeskey, char *aesiv, char *fmtpstr,
  							short unsigned pCtrlPort, short unsigned pTimingPort,
 -							void *owner, raopst_cb_t event_cb, raop_http_cb_t http_cb,
-+							void *owner, raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb,
++							void *owner, raopst_cb_t event_cb, raop_http_cb_t http_cb, raopsr_pcm_cb_t pcm_cb, void *pcm_owner,
  							unsigned short port_base, unsigned short port_range,
  							int http_length);
  void			 	raopst_end(struct raopst_s *ctx);
