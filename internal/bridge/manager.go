@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -32,6 +33,10 @@ type Config struct {
 	ConfigPath string
 	ServerPort uint16
 	ServerName string
+}
+
+type volumeController interface {
+	SetVolume(clientID string, volume int) error
 }
 
 type Manager struct {
@@ -280,10 +285,13 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 		return nil, err
 	}
 	if t := m.targets[speaker.ID]; t != nil {
+		control := m.inbound
 		m.mu.Unlock()
 		if err := t.configurePlayer(hello.PlayerV1Support); err != nil {
 			return nil, err
 		}
+		t.setClientID(hello.ClientID)
+		t.setVolumeController(control)
 		return t.pipeline, nil
 	}
 	if m.ctx == nil {
@@ -294,6 +302,7 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 	if err == nil {
 		m.targets[speaker.ID] = t
 	}
+	control := m.inbound
 	m.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -303,6 +312,8 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 	if err := t.configurePlayer(hello.PlayerV1Support); err != nil {
 		return nil, err
 	}
+	t.setClientID(hello.ClientID)
+	t.setVolumeController(control)
 	return t.pipeline, nil
 }
 
@@ -312,6 +323,9 @@ type target struct {
 	receiver       *raop.Receiver
 	advertiser     *airplay.Advertiser
 	rememberClient func(speakerID, clientID string) error
+	sessionMu      sync.RWMutex
+	volumeControl  volumeController
+	clientID       string
 	infoMu         sync.RWMutex
 	info           discovery.ClientInfo
 	ctx            context.Context
@@ -334,6 +348,7 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, rememb
 		speaker:        speaker,
 		pipeline:       pipeline,
 		rememberClient: rememberClient,
+		clientID:       speaker.ClientID,
 		info:           speaker.clientInfo(),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -355,6 +370,7 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, rememb
 		PortBase:  speaker.Port,
 		PortRange: portRange,
 		Source:    t.pipeline,
+		OnVolume:  t.onVolume,
 	})
 	if err != nil {
 		_ = pipeline.Close()
@@ -403,7 +419,9 @@ func (t *target) run() {
 			KeepSourceOpen: true,
 		})
 		if err == nil {
+			t.setVolumeController(server)
 			err = server.StartOutbound(t.ctx, &info)
+			t.setVolumeController(nil)
 		}
 		if t.ctx.Err() != nil {
 			return
@@ -418,10 +436,13 @@ func (t *target) run() {
 }
 
 func (t *target) onClientHello(hello protocol.ClientHello) error {
-	if t.rememberClient == nil {
-		return nil
+	if t.rememberClient != nil {
+		if err := t.rememberClient(t.speaker.ID, hello.ClientID); err != nil {
+			return err
+		}
 	}
-	return t.rememberClient(t.speaker.ID, hello.ClientID)
+	t.setClientID(hello.ClientID)
+	return nil
 }
 
 func (t *target) updateEndpoint(endpoint endpoint) {
@@ -481,6 +502,37 @@ func (e endpoint) clientInfo(name string) discovery.ClientInfo {
 
 func validClientInfo(info discovery.ClientInfo) bool {
 	return info.Name != "" && info.Host != "" && info.Port > 0
+}
+
+func (t *target) setVolumeController(control volumeController) {
+	t.sessionMu.Lock()
+	t.volumeControl = control
+	t.sessionMu.Unlock()
+}
+
+func (t *target) setClientID(clientID string) {
+	t.sessionMu.Lock()
+	t.clientID = clientID
+	t.sessionMu.Unlock()
+}
+
+func (t *target) onVolume(volume float64) {
+	t.sessionMu.RLock()
+	control, clientID := t.volumeControl, t.clientID
+	t.sessionMu.RUnlock()
+	if control != nil && clientID != "" {
+		_ = control.SetVolume(clientID, airPlayVolumePercent(volume))
+	}
+}
+
+func airPlayVolumePercent(volume float64) int {
+	if math.IsNaN(volume) || volume <= 0 {
+		return 0
+	}
+	if volume >= 1 {
+		return 100
+	}
+	return int(math.Round(volume * 100))
 }
 
 func airPlayTargetName(name string) string { return name + airPlaySuffix }

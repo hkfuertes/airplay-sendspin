@@ -35,15 +35,17 @@ type Config struct {
 	PortRange uint16
 	Source    pcm.Sink
 	OnEvent   func(Event)
+	OnVolume  func(float64)
 }
 
 // Receiver advertises no mDNS itself; its caller advertises the returned port.
 type Receiver struct {
-	source  pcm.Sink
-	onEvent func(Event)
-	handle  cgo.Handle
-	c       *C.bridge_receiver_t
-	once    sync.Once
+	source   pcm.Sink
+	onEvent  func(Event)
+	onVolume func(float64)
+	handle   cgo.Handle
+	c        *C.bridge_receiver_t
+	once     sync.Once
 }
 
 func New(config Config) (*Receiver, error) {
@@ -64,7 +66,7 @@ func New(config Config) (*Receiver, error) {
 		config.PortRange = 1
 	}
 
-	r := &Receiver{source: config.Source, onEvent: config.OnEvent}
+	r := &Receiver{source: config.Source, onEvent: config.OnEvent, onVolume: config.OnVolume}
 	r.handle = cgo.NewHandle(r)
 
 	name := C.CString(config.Name)
@@ -122,5 +124,13 @@ func goRaopEvent(owner C.uintptr_t, event C.int) {
 	}
 	if r.onEvent != nil {
 		r.onEvent(e)
+	}
+}
+
+//export goRaopVolume
+func goRaopVolume(owner C.uintptr_t, volume C.double) {
+	r := cgo.Handle(owner).Value().(*Receiver)
+	if r.onVolume != nil {
+		r.onVolume(float64(volume))
 	}
 }
