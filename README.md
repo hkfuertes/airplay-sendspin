@@ -7,15 +7,19 @@ Sendspin session.
 ```sh
 git clone --recurse-submodules https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
-docker compose up -d
-# Tests: docker compose run --rm bridge go test ./...
+docker compose up -d --build
+# The image build runs vet and all Go tests.
 ```
 
-## `config.xml`
+## `state/config.xml`
 
 The bridge creates and atomically updates this file as speakers appear. It is
 runtime state and intentionally ignored by Git; restart the bridge after a
 manual edit.
+
+The gitlinks pin the upstream submodule hashes. Docker applies
+`patches/libraop-pcm.patch` and `patches/sendspin-go.patch`, then rebuilds
+libraop before building the bridge binary; vendor working trees stay clean.
 
 ```xml
 <airplay-sendspin version="1">

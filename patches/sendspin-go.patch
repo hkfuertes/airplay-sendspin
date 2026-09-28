@@ -1023,3 +1023,126 @@ index 8b7438d..a59b05b 100644
  
  	// Read server/hello response
  	var msg protocol.Message
+diff --git a/pkg/sendspin/server_stream_test.go b/pkg/sendspin/server_stream_test.go
+new file mode 100644
+index 0000000..8450a27
+--- /dev/null
++++ b/pkg/sendspin/server_stream_test.go
+@@ -0,0 +1,117 @@
++package sendspin
++
++import (
++	"bytes"
++	"encoding/binary"
++	"testing"
++
++	"github.com/Sendspin/sendspin-go/pkg/protocol"
++)
++
++type chunkSource struct {
++	value int32
++	reads int
++}
++
++func (s *chunkSource) Read(samples []int32) (int, error) {
++	for i := range samples {
++		samples[i] = s.value
++	}
++	s.reads++
++	return len(samples), nil
++}
++func (*chunkSource) SampleRate() int                    { return 48000 }
++func (*chunkSource) Channels() int                      { return 2 }
++func (*chunkSource) Metadata() (string, string, string) { return "", "", "" }
++func (*chunkSource) Close() error                       { return nil }
++
++func TestGenerateAndSendClientChunksUsesIsolatedSources(t *testing.T) {
++	left, right := &chunkSource{value: 123}, &chunkSource{value: -456}
++	server := &Server{
++		config:      ServerConfig{BitDepth: 16, SourceForClient: func(protocol.ClientHello) (AudioSource, error) { return nil, nil }},
++		audioSource: &chunkSource{},
++		clients: map[string]*ServerClient{
++			"left":  {name: "left", source: left, codec: "pcm", helloAt: -noSyncFallbackUs, sendChan: make(chan interface{}, 1)},
++			"right": {name: "right", source: right, codec: "pcm", helloAt: -noSyncFallbackUs, sendChan: make(chan interface{}, 1)},
++		},
++	}
++
++	server.generateAndSendChunk(42)
++	if left.reads != 1 || right.reads != 1 {
++		t.Fatalf("reads = left %d, right %d; want one each", left.reads, right.reads)
++	}
++	for _, tc := range []struct {
++		client *ServerClient
++		want   int16
++	}{
++		{server.clients["left"], 123},
++		{server.clients["right"], -456},
++	} {
++		frame, ok := (<-tc.client.sendChan).([]byte)
++		if !ok || len(frame) < 11 {
++			t.Fatalf("frame = %#v", frame)
++		}
++		if got := int16(binary.LittleEndian.Uint16(frame[9:11])); got != tc.want {
++			t.Fatalf("PCM sample = %d, want %d", got, tc.want)
++		}
++	}
++}
++
++func TestEncodePCM16(t *testing.T) {
++	got := encodePCM([]int32{0, 1, -1, 32767, -32768}, 16)
++	want := []byte{0, 0, 1, 0, 255, 255, 255, 127, 0, 128}
++	if !bytes.Equal(got, want) {
++		t.Fatalf("encodePCM(16) = %v, want %v", got, want)
++	}
++}
++
++func TestNegotiateCodecPrefersCompatiblePCM(t *testing.T) {
++	c := &ServerClient{capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++		{Codec: "flac", SampleRate: 48000, Channels: 2, BitDepth: 16},
++		{Codec: "pcm", SampleRate: 48000, Channels: 2, BitDepth: 16},
++	}}}
++	if got := negotiateCodec(c, 48000, 2, 16, "pcm"); got != "pcm" {
++		t.Fatalf("codec = %q, want pcm", got)
++	}
++}
++
++func TestAudioReady(t *testing.T) {
++	for _, tc := range []struct {
++		helloAt, syncAt, now int64
++		want                 bool
++	}{
++		{5, 0, 5 + noSyncFallbackUs - 1, false},      // no sync yet: hold
++		{5, 0, 5 + noSyncFallbackUs, true},           // never syncs: fallback
++		{5, 10, 10 + initialSyncSettleUs - 1, false}, // settling
++		{5, 10, 10 + initialSyncSettleUs, true},
++	} {
++		if got := audioReady(tc.helloAt, tc.syncAt, tc.now); got != tc.want {
++			t.Fatalf("audioReady(%d, %d, %d) = %v, want %v", tc.helloAt, tc.syncAt, tc.now, got, tc.want)
++		}
++	}
++}
++
++func TestTimelineIsSampleContinuous(t *testing.T) {
++	var next, now int64 = 0, 1_000_000
++	var sent []int64
++	for _, gap := range []int64{0, 19_500, 20_800, 45_000, 19_700} { // jitter plus one late tick
++		now += gap
++		start, n := timeline(next, now)
++		for i := range int64(n) {
++			sent = append(sent, start+i*chunkUs)
++		}
++		next = start + int64(n)*chunkUs
++	}
++	if sent[0] != 1_000_000+aheadUs || len(sent) != 6 {
++		t.Fatalf("sent %v, want 6 chunks from %d", sent, 1_000_000+aheadUs)
++	}
++	for i := 1; i < len(sent); i++ {
++		if sent[i]-sent[i-1] != chunkUs {
++			t.Fatalf("chunk %d at %d, want %d", i, sent[i], sent[i-1]+chunkUs)
++		}
++	}
++	now += 2 * aheadUs // stall past the whole buffer: new timeline
++	if start, n := timeline(next, now); start != now+aheadUs || n != 1 {
++		t.Fatalf("after stall got (%d, %d), want (%d, 1)", start, n, now+aheadUs)
++	}
++}

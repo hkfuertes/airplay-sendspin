@@ -2,14 +2,6 @@ services:
   bridge:
     build: .
     network_mode: host
-    working_dir: /src
     volumes:
-      - .:/src
-      - go-build:/root/.cache/go-build
-      - go-mod:/go/pkg/mod
-    command: go run ./cmd/goplay2-sendspin -config config.xml
+      - ./state:/data
     restart: unless-stopped
-
-volumes:
-  go-build:
-  go-mod:

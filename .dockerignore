@@ -2,3 +2,5 @@
 **/.git
 bin
 coverage
+config.xml
+state
