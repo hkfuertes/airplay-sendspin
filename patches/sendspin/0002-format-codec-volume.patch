@@ -1,0 +1,424 @@
+diff --git a/pkg/sendspin/role_player.go b/pkg/sendspin/role_player.go
+index b58eb83..84e565d 100644
+--- a/pkg/sendspin/role_player.go
++++ b/pkg/sendspin/role_player.go
+@@ -13,9 +13,19 @@ import (
+ 
+ // PlayerRoleConfig configures the PlayerGroupRole.
+ type PlayerRoleConfig struct {
+-	SampleRate int
+-	Channels   int
+-	BitDepth   int
++	SampleRate     int
++	Channels       int
++	BitDepth       int
++	PreferredCodec string
++
++	// AudioFormat returns the current source format at client join. It lets a
++	// one-player source select a profile from client/hello before stream/start.
++	// Nil retains the static fields above.
++	AudioFormat func() (sampleRate, channels, bitDepth int)
++
++	// ClientAudioFormat overrides AudioFormat for a client with an isolated
++	// source selected at client/hello.
++	ClientAudioFormat func(*ServerClient) (sampleRate, channels, bitDepth int)
+ 
+ 	// NewEncoder creates an Opus encoder when needed. When nil, Opus
+ 	// clients fall back to PCM. Typically set to encode.NewOpusEncoder.
+@@ -41,6 +51,16 @@ func NewPlayerRole(config PlayerRoleConfig) *PlayerGroupRole {
+ 
+ func (r *PlayerGroupRole) Role() string { return "player" }
+ 
++func (r *PlayerGroupRole) audioFormat(c *ServerClient) (sampleRate, channels, bitDepth int) {
++	if r.config.ClientAudioFormat != nil {
++		return r.config.ClientAudioFormat(c)
++	}
++	if r.config.AudioFormat != nil {
++		return r.config.AudioFormat()
++	}
++	return r.config.SampleRate, r.config.Channels, r.config.BitDepth
++}
++
+ // OnClientJoin negotiates a codec, creates encoder/resampler if needed,
+ // and sends stream/start to clients advertising the player role.
+ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -48,7 +68,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+ 		return
+ 	}
+ 
+-	codec := negotiateCodec(c, r.config.SampleRate)
++	sampleRate, channels, bitDepth := r.audioFormat(c)
++	codec := negotiateCodec(c, sampleRate, channels, bitDepth, r.config.PreferredCodec)
+ 
+ 	var opusEncoder *encode.OpusEncoder
+ 	var flacEncoder *encode.FLACEncoder
+@@ -56,14 +77,14 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+ 
+ 	switch codec {
+ 	case "opus":
+-		if r.config.SampleRate != 48000 {
+-			resampler = audio.NewResampler(r.config.SampleRate, 48000, r.config.Channels)
+-			log.Printf("Created resampler: %dHz -> 48kHz for Opus (client: %s)", r.config.SampleRate, c.Name())
++		if sampleRate != 48000 {
++			resampler = audio.NewResampler(sampleRate, 48000, channels)
++			log.Printf("Created resampler: %dHz -> 48kHz for Opus (client: %s)", sampleRate, c.Name())
+ 		}
+ 
+ 		opusChunkSamples := (48000 * ChunkDurationMs) / 1000
+ 		if r.config.NewEncoder != nil {
+-			encoder, err := r.config.NewEncoder(48000, r.config.Channels, opusChunkSamples)
++			encoder, err := r.config.NewEncoder(48000, channels, opusChunkSamples)
+ 			if err != nil {
+ 				log.Printf("Failed to create Opus encoder for %s, falling back to PCM: %v", c.Name(), err)
+ 				codec = "pcm"
+@@ -77,9 +98,9 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+ 			resampler = nil
+ 		}
+ 	case "flac":
+-		chunkSamples := (r.config.SampleRate * ChunkDurationMs) / 1000
++		chunkSamples := (sampleRate * ChunkDurationMs) / 1000
+ 		if r.config.NewFLACEncoder != nil {
+-			encoder, err := r.config.NewFLACEncoder(r.config.SampleRate, r.config.Channels, r.config.BitDepth, chunkSamples)
++			encoder, err := r.config.NewFLACEncoder(sampleRate, channels, bitDepth, chunkSamples)
+ 			if err != nil {
+ 				log.Printf("Failed to create FLAC encoder for %s, falling back to PCM: %v", c.Name(), err)
+ 				codec = "pcm"
+@@ -108,8 +129,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+ 
+ 	log.Printf("Added client %s with codec %s", c.Name(), codec)
+ 
+-	streamSampleRate := r.config.SampleRate
+-	streamBitDepth := r.config.BitDepth
++	streamSampleRate := sampleRate
++	streamBitDepth := bitDepth
+ 	if codec == "opus" {
+ 		streamSampleRate = 48000
+ 		streamBitDepth = 16
+@@ -124,7 +145,7 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+ 		Player: &protocol.StreamStartPlayer{
+ 			Codec:       codec,
+ 			SampleRate:  streamSampleRate,
+-			Channels:    r.config.Channels,
++			Channels:    channels,
+ 			BitDepth:    streamBitDepth,
+ 			CodecHeader: codecHeaderB64,
+ 		},
+diff --git a/pkg/sendspin/role_player_test.go b/pkg/sendspin/role_player_test.go
+index 57f0c26..5409cea 100644
+--- a/pkg/sendspin/role_player_test.go
++++ b/pkg/sendspin/role_player_test.go
+@@ -40,6 +40,64 @@ func TestPlayerRole_OnClientJoinSendsStreamStart(t *testing.T) {
+ 	}
+ }
+ 
++func TestPlayerRole_UsesDynamicAudioFormat(t *testing.T) {
++	role := NewPlayerRole(PlayerRoleConfig{
++		SampleRate: 48000,
++		Channels:   2,
++		BitDepth:   24,
++		AudioFormat: func() (int, int, int) {
++			return 44100, 2, 16
++		},
++	})
++	sc := &ServerClient{
++		id:    "c1",
++		roles: []string{"player@v1"},
++		capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++			{Codec: "pcm", SampleRate: 44100, Channels: 2, BitDepth: 16},
++		}},
++		sendChan: make(chan interface{}, 1),
++	}
++
++	role.OnClientJoin(sc)
++	message, ok := (<-sc.sendChan).(protocol.Message)
++	if !ok || message.Type != "stream/start" {
++		t.Fatalf("message = %#v, want stream/start", message)
++	}
++	start, ok := message.Payload.(protocol.StreamStart)
++	if !ok || start.Player == nil {
++		t.Fatalf("stream/start payload = %#v", message.Payload)
++	}
++	if got := start.Player; got.SampleRate != 44100 || got.Channels != 2 || got.BitDepth != 16 {
++		t.Fatalf("stream format = %+v, want 44100/2/16", got)
++	}
++}
++
++func TestPlayerRole_UsesClientAudioFormat(t *testing.T) {
++	role := NewPlayerRole(PlayerRoleConfig{
++		SampleRate: 48000,
++		Channels:   2,
++		BitDepth:   24,
++		ClientAudioFormat: func(*ServerClient) (int, int, int) {
++			return 44100, 2, 16
++		},
++	})
++	sc := &ServerClient{
++		id:    "c1",
++		roles: []string{"player@v1"},
++		capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++			{Codec: "pcm", SampleRate: 44100, Channels: 2, BitDepth: 16},
++		}},
++		sendChan: make(chan interface{}, 1),
++	}
++
++	role.OnClientJoin(sc)
++	message := (<-sc.sendChan).(protocol.Message)
++	start := message.Payload.(protocol.StreamStart)
++	if got := start.Player; got.SampleRate != 44100 || got.Channels != 2 || got.BitDepth != 16 {
++		t.Fatalf("stream format = %+v, want 44100/2/16", got)
++	}
++}
++
+ func TestPlayerRole_OnClientJoinSkipsNonPlayerClient(t *testing.T) {
+ 	role := NewPlayerRole(PlayerRoleConfig{
+ 		SampleRate: 48000,
+diff --git a/pkg/sendspin/server.go b/pkg/sendspin/server.go
+index e149781..3746838 100644
+--- a/pkg/sendspin/server.go
++++ b/pkg/sendspin/server.go
+@@ -30,6 +30,13 @@ type ServerConfig struct {
+ 	// Audio source to stream (required)
+ 	Source AudioSource
+ 
++	// BitDepth declares the PCM precision returned by Source. Defaults to 24.
++	BitDepth int
++
++	// PreferredCodec selects pcm, flac, or opus when the player supports it.
++	// An unsupported preference falls back to a compatible advertised format.
++	PreferredCodec string
++
+ 	// EnableMDNS enables mDNS service advertisement (default: true)
+ 	EnableMDNS bool
+ 
+@@ -104,6 +111,15 @@ func NewServer(config ServerConfig) (*Server, error) {
+ 	if config.Source == nil {
+ 		return nil, fmt.Errorf("audio source is required")
+ 	}
++	if config.BitDepth == 0 {
++		config.BitDepth = DefaultBitDepth
++	}
++	if config.BitDepth != 16 && config.BitDepth != DefaultBitDepth {
++		return nil, fmt.Errorf("bit depth must be 16 or %d", DefaultBitDepth)
++	}
++	if config.PreferredCodec != "" && config.PreferredCodec != "pcm" && config.PreferredCodec != "flac" && config.PreferredCodec != "opus" {
++		return nil, fmt.Errorf("unsupported preferred codec %q", config.PreferredCodec)
++	}
+ 	if config.SupportedRoles == nil {
+ 		config.SupportedRoles = []string{"player", "metadata"}
+ 	}
+@@ -137,9 +153,12 @@ func NewServer(config ServerConfig) (*Server, error) {
+ 	}))
+ 
+ 	s.defaultGroup.RegisterRole(NewPlayerRole(PlayerRoleConfig{
+-		SampleRate: s.audioSource.SampleRate(),
+-		Channels:   s.audioSource.Channels(),
+-		BitDepth:   DefaultBitDepth,
++		SampleRate:        s.audioSource.SampleRate(),
++		Channels:          s.audioSource.Channels(),
++		BitDepth:          s.audioBitDepth(),
++		PreferredCodec:    config.PreferredCodec,
++		AudioFormat:       s.audioFormat,
++		ClientAudioFormat: s.clientAudioFormat,
+ 		NewEncoder: func(sampleRate, channels, chunkSamples int) (*encode.OpusEncoder, error) {
+ 			return encode.NewOpusEncoder(sampleRate, channels, chunkSamples)
+ 		},
+@@ -151,11 +170,50 @@ func NewServer(config ServerConfig) (*Server, error) {
+ 	return s, nil
+ }
+ 
++// audioBitDepth reads an optional dynamic source format. Static sources keep
++// ServerConfig.BitDepth for backward compatibility.
++func (s *Server) sourceBitDepth(audioSource AudioSource) int {
++	if source, ok := audioSource.(interface{ BitDepth() int }); ok {
++		if bitDepth := source.BitDepth(); bitDepth == 16 || bitDepth == DefaultBitDepth {
++			return bitDepth
++		}
++	}
++	return s.config.BitDepth
++}
++
++func (s *Server) audioBitDepth() int { return s.sourceBitDepth(s.audioSource) }
++
++func (s *Server) audioFormat() (sampleRate, channels, bitDepth int) {
++	return s.audioSource.SampleRate(), s.audioSource.Channels(), s.audioBitDepth()
++}
++
++func (s *Server) clientAudioFormat(c *ServerClient) (sampleRate, channels, bitDepth int) {
++	return s.audioSource.SampleRate(), s.audioSource.Channels(), s.audioBitDepth()
++}
++
++// SetVolume changes a connected player's volume (0-100).
++func (s *Server) SetVolume(clientID string, volume int) error {
++	if volume < 0 || volume > 100 {
++		return fmt.Errorf("volume must be between 0 and 100")
++	}
++	s.clientsMu.RLock()
++	c := s.clients[clientID]
++	s.clientsMu.RUnlock()
++	if c == nil {
++		return fmt.Errorf("client %q is not connected", clientID)
++	}
++	return c.Send("server/command", protocol.ServerCommandMessage{
++		Player: &protocol.PlayerCommand{Command: "volume", Volume: volume},
++	})
++}
++
++
++
+ func (s *Server) Start() error {
+ 	log.Printf("Server starting: %s (ID: %s)", s.config.Name, s.serverID)
+ 	log.Printf("Audio source: %dHz/%dbit/%dch",
+ 		s.audioSource.SampleRate(),
+-		DefaultBitDepth,
++		s.audioBitDepth(),
+ 		s.audioSource.Channels())
+ 
+ 	if s.config.EnableMDNS {
+diff --git a/pkg/sendspin/server_stream.go b/pkg/sendspin/server_stream.go
+index fc7927b..4af5fb3 100644
+--- a/pkg/sendspin/server_stream.go
++++ b/pkg/sendspin/server_stream.go
+@@ -40,6 +40,7 @@ func (s *Server) generateAndSendChunk() {
+ 	// issue #91 for converting the linear resampler to integer-rational math.
+ 	currentTime := s.getClockMicros()
+ 	playbackTime := currentTime + (BufferAheadMs * 1000)
++	bitDepth := s.audioBitDepth()
+ 
+ 	chunkSamples := (s.audioSource.SampleRate() * ChunkDurationMs) / 1000
+ 	totalSamples := chunkSamples * s.audioSource.Channels()
+@@ -89,7 +90,7 @@ func (s *Server) generateAndSendChunk() {
+ 					samplesToEncode = resampled[:samplesWritten]
+ 				}
+ 
+-				samples16 := convertToInt16(samplesToEncode)
++				samples16 := convertToInt16(samplesToEncode, bitDepth)
+ 				audioData, encodeErr = opusEncoder.Encode(samples16)
+ 				if encodeErr != nil {
+ 					log.Printf("Opus encode error for %s: %v", c.name, encodeErr)
+@@ -109,9 +110,9 @@ func (s *Server) generateAndSendChunk() {
+ 				continue
+ 			}
+ 		case "pcm":
+-			audioData = encodePCM(samples[:n])
++			audioData = encodePCM(samples[:n], bitDepth)
+ 		default:
+-			audioData = encodePCM(samples[:n])
++			audioData = encodePCM(samples[:n], bitDepth)
+ 		}
+ 
+ 		chunk := CreateAudioChunk(playbackTime, audioData)
+@@ -165,27 +166,37 @@ func (s *Server) notifyStreamEnd() {
+ // the server accepts the first codec it can handle.
+ //
+ // Supported: pcm (at source rate), flac, opus. Falls back to pcm.
+-func negotiateCodec(c *ServerClient, sourceSampleRate int) string {
++func negotiateCodec(c *ServerClient, sourceSampleRate, sourceChannels, sourceBitDepth int, preferred string) string {
+ 	if c.capabilities == nil {
+ 		return "pcm"
+ 	}
+ 
+-	for _, format := range c.capabilities.SupportedFormats {
+-		switch format.Codec {
+-		case "pcm":
+-			if format.SampleRate == sourceSampleRate && format.BitDepth == DefaultBitDepth {
+-				return "pcm"
++	formats := c.capabilities.SupportedFormats
++	if preferred != "" {
++		for _, format := range formats {
++			if format.Codec == preferred && supportsCodecFormat(format, sourceSampleRate, sourceChannels, sourceBitDepth) {
++				return format.Codec
+ 			}
+-		case "flac":
+-			return "flac"
+-		case "opus":
+-			return "opus"
+ 		}
+ 	}
+-
++	for _, format := range formats {
++		if supportsCodecFormat(format, sourceSampleRate, sourceChannels, sourceBitDepth) {
++			return format.Codec
++		}
++	}
+ 	return "pcm"
+ }
+ 
++func supportsCodecFormat(format protocol.AudioFormat, sampleRate, channels, bitDepth int) bool {
++	switch format.Codec {
++	case "pcm", "flac":
++		return format.SampleRate == sampleRate && format.Channels == channels && format.BitDepth == bitDepth
++	case "opus":
++		return format.SampleRate == 48000 && format.Channels == channels && format.BitDepth == 16
++	}
++	return false
++}
++
+ func strPtr(s string) *string {
+ 	return &s
+ }
+@@ -211,16 +222,28 @@ func CreateArtworkChunk(channel int, timestamp int64, imageData []byte) []byte {
+ }
+ 
+ // convertToInt16 converts int32 samples to int16 (for Opus encoding)
+-func convertToInt16(samples []int32) []int16 {
++func convertToInt16(samples []int32, bitDepth int) []int16 {
+ 	result := make([]int16, len(samples))
+-	for i, s := range samples {
+-		result[i] = int16(s >> 8)
++	shift := bitDepth - 16
++	for i, sample := range samples {
++		if shift > 0 {
++			result[i] = int16(sample >> shift)
++		} else {
++			result[i] = int16(sample << -shift)
++		}
+ 	}
+ 	return result
+ }
+ 
+ // encodePCM encodes int32 samples as 24-bit PCM bytes
+-func encodePCM(samples []int32) []byte {
++func encodePCM(samples []int32, bitDepth int) []byte {
++	if bitDepth == 16 {
++		output := make([]byte, len(samples)*2)
++		for i, sample := range samples {
++			binary.LittleEndian.PutUint16(output[i*2:], uint16(int16(sample)))
++		}
++		return output
++	}
+ 	output := make([]byte, len(samples)*3)
+ 	for i, sample := range samples {
+ 		output[i*3] = byte(sample)
+diff --git a/pkg/sendspin/server_stream_test.go b/pkg/sendspin/server_stream_test.go
+new file mode 100644
+index 0000000..dde5072
+--- /dev/null
++++ b/pkg/sendspin/server_stream_test.go
+@@ -0,0 +1,27 @@
++package sendspin
++
++import (
++	"bytes"
++	"encoding/binary"
++	"testing"
++
++	"github.com/Sendspin/sendspin-go/pkg/protocol"
++)
++
++func TestEncodePCM16(t *testing.T) {
++	got := encodePCM([]int32{0, 1, -1, 32767, -32768}, 16)
++	want := []byte{0, 0, 1, 0, 255, 255, 255, 127, 0, 128}
++	if !bytes.Equal(got, want) {
++		t.Fatalf("encodePCM(16) = %v, want %v", got, want)
++	}
++}
++
++func TestNegotiateCodecPrefersCompatiblePCM(t *testing.T) {
++	c := &ServerClient{capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++		{Codec: "flac", SampleRate: 48000, Channels: 2, BitDepth: 16},
++		{Codec: "pcm", SampleRate: 48000, Channels: 2, BitDepth: 16},
++	}}}
++	if got := negotiateCodec(c, 48000, 2, 16, "pcm"); got != "pcm" {
++		t.Fatalf("codec = %q, want pcm", got)
++	}
++}

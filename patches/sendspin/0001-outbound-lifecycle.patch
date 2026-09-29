@@ -1,0 +1,161 @@
+diff --git a/pkg/sendspin/client_dialer.go b/pkg/sendspin/client_dialer.go
+index b7048cd..6a1175d 100644
+--- a/pkg/sendspin/client_dialer.go
++++ b/pkg/sendspin/client_dialer.go
+@@ -46,7 +46,17 @@ func dialAndHandle(ctx context.Context, info *discovery.ClientInfo, handle func(
+ 		return fmt.Errorf("dial %s: %w", url, err)
+ 	}
+ 	log.Printf("Dialed discovered client %s at %s", info.Name, url)
+-	if handle(conn) {
++	done := make(chan struct{})
++	go func() {
++		select {
++		case <-ctx.Done():
++			_ = conn.Close()
++		case <-done:
++		}
++	}()
++	retry := handle(conn)
++	close(done)
++	if retry {
+ 		return errRetryRequested
+ 	}
+ 	return nil
+diff --git a/pkg/sendspin/server.go b/pkg/sendspin/server.go
+index 390695e..e149781 100644
+--- a/pkg/sendspin/server.go
++++ b/pkg/sendspin/server.go
+@@ -40,6 +40,10 @@ type ServerConfig struct {
+ 	// See https://www.sendspin-audio.com/spec/ — "server-initiated" mode.
+ 	DiscoverClients bool
+ 
++	// KeepSourceOpen leaves Source ownership with the caller when the server stops.
++	// It is useful for reconnecting a single player to a long-lived live source.
++	KeepSourceOpen bool
++
+ 	// SupportedRoles lists the role families this server activates.
+ 	// When nil, defaults to ["player", "metadata"] for backward compat.
+ 	// Roles registered via Group.RegisterRole are also activated
+@@ -210,6 +214,8 @@ func (s *Server) Start() error {
+ 
+ 	listener, err := net.Listen("tcp", addr)
+ 	if err != nil {
++		s.Stop()
++		s.cleanup()
+ 		return fmt.Errorf("listen on %s: %w", addr, err)
+ 	}
+ 	tcpAddr, _ := listener.Addr().(*net.TCPAddr)
+@@ -232,42 +238,101 @@ func (s *Server) Start() error {
+ 		log.Printf("Server shutting down...")
+ 	case err := <-errChan:
+ 		log.Printf("HTTP server error: %v", err)
++		s.Stop()
++		s.cleanup()
+ 		return err
+ 	}
+ 
++	s.Stop()
++	s.cleanup()
++	return nil
++}
++
++func (s *Server) StartOutbound(ctx context.Context, info *discovery.ClientInfo) error {
++	if info == nil {
++		return fmt.Errorf("client info is required")
++	}
++	if ctx == nil {
++		ctx = context.Background()
++	}
++
++	s.shutdownMu.RLock()
++	shutdown := s.isShutdown
++	s.shutdownMu.RUnlock()
++	if shutdown {
++		return fmt.Errorf("server is shut down")
++	}
++
++	log.Printf("Starting outbound stream to %s at %s", info.Name, clientInfoURL(info))
++	s.wg.Add(1)
++	go func() {
++		defer s.wg.Done()
++		s.streamAudio()
++	}()
++
++	dialCtx, cancel := context.WithCancel(ctx)
++	s.dialerCancel = cancel
++	result := make(chan error, 1)
++	s.wg.Add(1)
++	go func() {
++		defer s.wg.Done()
++		result <- dialAndHandle(dialCtx, info, s.handleConnection)
++	}()
++
++	var err error
++	select {
++	case err = <-result:
++	case <-ctx.Done():
++		err = ctx.Err()
++	case <-s.stopChan:
++	}
++
++	s.Stop()
++	s.cleanup()
++	return err
++}
++
++func (s *Server) cleanup() {
+ 	s.shutdownMu.Lock()
+ 	s.isShutdown = true
+ 	s.shutdownMu.Unlock()
+ 
+-	// Cancel in-flight client dials before stopping mDNS so they observe
+-	// context cancellation ahead of the discovery channel closing.
+ 	if s.dialerCancel != nil {
+ 		s.dialerCancel()
+ 	}
+-
+ 	if s.mdnsManager != nil {
+ 		s.mdnsManager.Stop()
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+-	defer cancel()
+-
+-	if err := s.httpServer.Shutdown(ctx); err != nil {
+-		log.Printf("HTTP server shutdown error: %v", err)
++	s.clientsMu.RLock()
++	clients := make([]*ServerClient, 0, len(s.clients))
++	for _, client := range s.clients {
++		clients = append(clients, client)
++	}
++	s.clientsMu.RUnlock()
++	for _, client := range clients {
++		_ = client.conn.Close()
+ 	}
+ 
+-	if err := s.audioSource.Close(); err != nil {
+-		log.Printf("Error closing audio source: %v", err)
++	if s.httpServer != nil {
++		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		if err := s.httpServer.Shutdown(ctx); err != nil {
++			log.Printf("HTTP server shutdown error: %v", err)
++		}
++		cancel()
+ 	}
+ 
++	if !s.config.KeepSourceOpen {
++		if err := s.audioSource.Close(); err != nil {
++			log.Printf("Error closing audio source: %v", err)
++		}
++	}
+ 	if s.defaultGroup != nil {
+ 		s.defaultGroup.Close()
+ 	}
+ 
+ 	s.wg.Wait()
+ 	log.Printf("Server stopped cleanly")
+-
+-	return nil
+ }
+ 
+ func (s *Server) Stop() {

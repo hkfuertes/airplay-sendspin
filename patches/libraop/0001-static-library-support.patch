@@ -1,0 +1,21 @@
+diff --git a/Makefile b/Makefile
+index fc578a0..5cf71bc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -45,12 +45,15 @@ INCLUDE = -I$(VALGRIND)/memcheck -I$(VALGRIND)/include \
+ CURVE25519_SOURCES = curve25519_dh.c curve25519_mehdi.c curve25519_order.c curve25519_utils.c custom_blind.c\
+                      ed25519_sign.c ed25519_verify.c \		  
+ 
++SUPPORT_SOURCES = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c
++
+ SOURCES = raop_client.c rtsp_client.c \
+ 	  raop_server.c raop_streamer.c \
+ 	  aes.c aes_ctr.c \
+ 	  dmap_parser.c	\
+ 	  alac.c \
+-	  bplist.cpp pairing.cpp password.c
++	  bplist.cpp pairing.cpp password.c \
++	  $(SUPPORT_SOURCES)
+ 		  
+ SOURCES_BIN = cross_log.c cross_ssl.c cross_util.c cross_net.c platform.c cliraop.c 		  
+ 		  

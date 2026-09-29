@@ -5,7 +5,7 @@ libraop decodes it, then the bridge sends it directly to that speaker's
 Sendspin session.
 
 ```sh
-git clone --recurse-submodules https://github.com/hkfuertes/airplay-sendspin.git
+git clone https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
 docker compose up -d --build
 # The image build runs vet and all Go tests.
@@ -17,9 +17,9 @@ The bridge creates and atomically updates this file as speakers appear. It is
 runtime state and intentionally ignored by Git; restart the bridge after a
 manual edit.
 
-The gitlinks pin the upstream submodule hashes. Docker applies
-`patches/libraop-pcm.patch` and `patches/sendspin-go.patch`, then rebuilds
-libraop before building the bridge binary; vendor working trees stay clean.
+`dependencies.lock` pins the upstream commits. Docker clones them, applies the
+ordered patches in `patches/libraop/` and `patches/sendspin/`, then rebuilds
+libraop before building the bridge binary; no vendor source is checked in.
 
 ```xml
 <airplay-sendspin version="1">

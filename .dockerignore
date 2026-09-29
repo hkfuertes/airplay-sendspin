@@ -4,3 +4,4 @@ bin
 coverage
 config.xml
 state
+third_party/
