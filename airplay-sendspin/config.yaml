@@ -1,0 +1,12 @@
+name: AirPlay Sendspin
+version: "0.1.0"
+slug: airplay_sendspin
+description: AirPlay targets for your Sendspin speakers.
+url: https://github.com/hkfuertes/airplay-sendspin
+arch:
+  - amd64
+image: ghcr.io/hkfuertes/airplay-sendspin-{arch}
+startup: services
+host_network: true
+map:
+  - addon_config:rw

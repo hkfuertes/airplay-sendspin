@@ -11,6 +11,15 @@ docker compose up -d --build
 # The image build runs vet and all Go tests.
 ```
 
+### Home Assistant add-on
+
+Add this repository under Settings → Add-ons → Add-on store → Repositories,
+then install **AirPlay Sendspin**. Home Assistant pulls a prebuilt image
+(amd64) published by `.github/workflows/addon.yaml` when
+`airplay-sendspin/config.yaml`'s `version` changes; `config.xml` lives in the
+add-on's config folder. The repository and its GHCR packages must be public (or
+the registry added to Supervisor) for Home Assistant to fetch them.
+
 ## `state/config.xml`
 
 The bridge creates and atomically updates this file as speakers appear. It is
@@ -25,7 +34,8 @@ libraop before building the bridge binary; no vendor source is checked in.
 <airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
   <speakers>
     <speaker id="cocina" client_id="echo-kitchen"
-             airplay_name="Cocina" direction="outbound" port="7000" delay_ms="0">
+             airplay_name="Cocina" direction="outbound" port="7000"
+             hidden="false" delay_ms="0">
       <endpoint instance="kitchen._sendspin._tcp.local."
                 host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
@@ -46,6 +56,9 @@ libraop before building the bridge binary; no vendor source is checked in.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.
 - Exactly one direction is allowed per speaker.
+- `hidden="true"` stops advertising the speaker's own AirPlay target. It still
+  plays its groups; outside any group the bridge leaves the player alone (no
+  Sendspin session), so another server can use it.
 - `delay_ms` holds back only that speaker's group audio (0–500 ms). The first
   hello writes `delay_ms="0"`; after that the XML value is authoritative.
 - Each `<group>` is written by hand and is advertised as its own AirPlay target

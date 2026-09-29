@@ -359,8 +359,16 @@ func (m *Manager) add(ctx context.Context, info *discovery.ClientInfo) error {
 	return m.ensureTarget(ctx, speaker)
 }
 
+// wanted reports whether a speaker needs a Sendspin session: a hidden speaker
+// outside every group is left free for other Sendspin servers.
+func (m *Manager) wanted(s speaker) bool { return !s.Hidden || len(m.memberGroups[s.ID]) > 0 }
+
 func (m *Manager) ensureTarget(ctx context.Context, speaker speaker) error {
 	m.mu.Lock()
+	if !m.wanted(speaker) {
+		m.mu.Unlock()
+		return nil
+	}
 	if t := m.targets[speaker.ID]; t != nil {
 		t.updateEndpoint(speaker.Endpoint)
 		m.mu.Unlock()
@@ -398,6 +406,9 @@ func (m *Manager) rememberClient(speakerID, clientID string) (time.Duration, err
 func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.AudioSource, error) {
 	m.mu.Lock()
 	speaker, _, err := m.registry.upsertInbound(hello.ClientID, hello.Name)
+	if err == nil && !m.wanted(speaker) {
+		err = fmt.Errorf("speaker %q is hidden and in no group", speaker.ID)
+	}
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
@@ -476,6 +487,9 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, suffix
 		done:           make(chan struct{}),
 	}
 
+	if speaker.Hidden {
+		return t, nil
+	}
 	if t.airPlay, err = advertiseAirPlay(speaker.ID, speaker.AirPlayName, suffix, speaker.Port, portRange, pipeline, t.onVolume); err != nil {
 		_ = pipeline.Close()
 		cancel()
@@ -520,6 +534,9 @@ func advertiseAirPlay(key, name, suffix string, port, portRange uint16, sink pcm
 }
 
 func (a *airPlayTarget) Close() {
+	if a == nil {
+		return // hidden speaker
+	}
 	a.advertiser.Close()
 	a.receiver.Close()
 }

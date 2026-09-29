@@ -52,7 +52,7 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
 <airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
   <speakers>
     <speaker id="cocina" client_id="…" airplay_name="Cocina"
-             direction="outbound" port="7000" delay_ms="0">
+             direction="outbound" port="7000" hidden="false" delay_ms="0">
       <endpoint instance="…" host="…" port="8928" path="/sendspin"/>
     </speaker>
   </speakers>
@@ -68,12 +68,28 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
 - `airplay_suffix`: se añade a todos los nombres AirPlay de altavoz y grupo;
   `""` lo elimina. No se repite por speaker porque es una política global.
 - Puertos: bloques de 10 desde 7000, repartidos entre altavoces y grupos.
+- `hidden="true"`: no anuncia el target AirPlay propio del altavoz. Si está en
+  algún grupo sigue conectado para el grupo; si no, el bridge no abre sesión
+  Sendspin con él (outbound no marca, inbound se rechaza), así no bloquea la
+  única sesión del reproductor a otro servidor. Se escribe `false` siempre.
 - `delay_ms`: 0–500 ms; retiene sólo el audio de grupo de ese altavoz. Al
   primer `client/hello` se escribe `0`; después el XML manda.
 - Grupos escritos a mano: id único, miembros existentes y sin repetir (si no,
   error al cargar). Cambios en el XML requieren reiniciar.
-- Anuncio AirPlay: `airplay_name + " (Sendspin)"`; MAC virtual derivada de
+- Anuncio AirPlay: `airplay_name + airplay_suffix`; MAC virtual derivada de
   `id` (altavoces) o `group:id` (grupos).
+
+### 2.6 Add-on de Home Assistant
+
+Modelo de Aircast (hassio-addons): `repository.yaml` en la raíz y
+`airplay-sendspin/config.yaml` con `image: ghcr.io/hkfuertes/airplay-sendspin-{arch}`,
+`host_network` y `addon_config` montado en `/config` (ahí vive `config.xml`,
+editable con File editor/Samba). La imagen es la etapa `addon` del Dockerfile
+(misma que `runtime`, con `-config /config/config.xml`). El workflow
+`.github/workflows/addon.yaml` la publica para amd64 al cambiar `version`.
+Sin
+opciones en la UI: todo se configura en `config.xml`. Requisito: repo y
+paquetes GHCR públicos (o registro con credenciales en Supervisor).
 
 ### 2.5 Parches
 
@@ -251,6 +267,9 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
       suena en toda la casa; con `delay_ms="0"` no se reprodujo el desfase.
 - [ ] Si vuelve un desfase reproducible: medirlo y escribir `delay_ms` del
       speaker afectado en el XML; no añadir quirks por modelo.
+- [ ] Add-on: sin opciones. Si Music Assistant (servidor Sendspin) corre en el
+      mismo host, ambos querrían el puerto 8927; entonces exponer
+      `server_port` (y quizá `port_base`) como opción del add-on.
 - [ ] Variantes por formato dentro del grupo (fechadas por contenido, §5.2);
       eliminaría `GroupFormat` fijo y la preferencia de formato. Esperar a que
       haya un altavoz que lo necesite.

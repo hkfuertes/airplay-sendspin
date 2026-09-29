@@ -60,9 +60,9 @@ func TestRegistryPersistsDiscoveredSpeaker(t *testing.T) {
 	}
 }
 
-func TestRegistryAirPlaySuffixAllowsEmpty(t *testing.T) {
+func TestRegistryNormalizesOlderConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.xml")
-	data := `<?xml version="1.0"?><airplay-sendspin version="1" airplay_suffix=""></airplay-sendspin>`
+	data := `<?xml version="1.0"?><airplay-sendspin version="1" airplay_suffix=""><speakers><speaker id="dot" direction="outbound" port="7000"/></speakers></airplay-sendspin>`
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +72,13 @@ func TestRegistryAirPlaySuffixAllowsEmpty(t *testing.T) {
 	}
 	if got := r.airPlaySuffix(); got != "" {
 		t.Fatalf("suffix = %q, want empty", got)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `airplay_suffix=""`) || !strings.Contains(string(saved), `hidden="false"`) {
+		t.Fatalf("config.xml not normalized:\n%s", saved)
 	}
 }
 

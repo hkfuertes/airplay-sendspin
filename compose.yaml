@@ -1,6 +1,8 @@
 services:
   bridge:
-    build: .
+    build:
+      context: .
+      target: runtime
     network_mode: host
     volumes:
       - ./state:/data
