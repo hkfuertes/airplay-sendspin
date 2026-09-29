@@ -1,6 +1,0 @@
-[submodule "third_party/libraop"]
-	path = third_party/libraop
-	url = https://github.com/philippe44/libraop.git
-[submodule "third_party/sendspin-go"]
-	path = third_party/sendspin-go
-	url = https://github.com/Sendspin/sendspin-go.git
