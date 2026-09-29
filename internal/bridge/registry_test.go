@@ -60,24 +60,39 @@ func TestRegistryPersistsDiscoveredSpeaker(t *testing.T) {
 	}
 }
 
-func TestRegistryPreservesInactiveGroups(t *testing.T) {
+func TestRegistryGroups(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.xml")
-	if err := os.WriteFile(path, []byte(`<?xml version="1.0"?>
-<airplay-sendspin version="1"><speakers></speakers><groups><group id="whole-house" airplay_name="Toda la casa"><speaker id="cocina"/></group></groups></airplay-sendspin>`), 0o644); err != nil {
-		t.Fatal(err)
+	config := func(members string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`<?xml version="1.0"?>
+<airplay-sendspin version="1"><speakers><speaker id="cocina" direction="inbound" port="7000"/></speakers><groups><group id="whole-house" airplay_name="Toda la casa">`+members+`</group></groups></airplay-sendspin>`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
+	for _, bad := range []string{`<speaker id="salon"/>`, `<speaker id="cocina"/><speaker id="cocina"/>`} {
+		config(bad)
+		if _, err := loadRegistry(path, 7000, 10); err == nil {
+			t.Fatalf("loaded group with members %s", bad)
+		}
+	}
+
+	config(`<speaker id="cocina"/>`)
 	r, err := loadRegistry(path, 7000, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.upsertOutbound(discovery.ClientInfo{Name: "Cocina", Host: "192.0.2.10", Port: 8928}); err != nil {
-		t.Fatal(err)
+	if groups := r.groups(); len(groups) != 1 || groups[0].Port != 7010 {
+		t.Fatalf("groups = %+v, want whole-house on the next free port", groups)
+	}
+	speaker, _, err := r.upsertOutbound(discovery.ClientInfo{Name: "Salon", Host: "192.0.2.10", Port: 8928})
+	if err != nil || speaker.Port != 7020 {
+		t.Fatalf("discovered speaker = (%+v, %v), want port 7020", speaker, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `group id="whole-house"`) || !strings.Contains(string(data), `speaker id="cocina"`) {
+	if !strings.Contains(string(data), `group id="whole-house"`) || !strings.Contains(string(data), `port="7010"`) {
 		t.Fatalf("discovery erased group:\n%s", data)
 	}
 }

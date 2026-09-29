@@ -30,6 +30,12 @@ libraop before building the bridge binary; no vendor source is checked in.
                 host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
   </speakers>
+  <groups>
+    <group id="casa" airplay_name="Toda la casa" port="7020">
+      <speaker id="cocina"/>
+      <speaker id="salon"/>
+    </group>
+  </groups>
 </airplay-sendspin>
 ```
 
@@ -39,6 +45,9 @@ libraop before building the bridge binary; no vendor source is checked in.
 - `direction="outbound"`: bridge discovers and dials `_sendspin._tcp`.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.
-- Exactly one direction is allowed per speaker. `<groups>` is preserved but
-  inactive for now; later groups will reference `speaker id` without changing
-  discovery or AirPlay identity.
+- Exactly one direction is allowed per speaker.
+- Each `<group>` is written by hand and is advertised as its own AirPlay target
+  (`port` is filled in if missing). It plays in sync on every member `speaker
+  id`, at 48 kHz/16-bit. Members stay advertised on their own; if a speaker's
+  own target and one of its groups play at once, the speaker mixes both. Group
+  volume sets every member to that volume.

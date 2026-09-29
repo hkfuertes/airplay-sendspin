@@ -24,11 +24,12 @@ type registryDocument struct {
 	Groups   []group   `xml:"groups>group"`
 }
 
-// group is deliberately inert for now. Keeping its references in the registry
-// lets future grouping reuse stable speaker IDs without discovery erasing them.
+// group is one extra AirPlay target that plays in sync on every member
+// speaker. Groups are edited by hand; members are stable speaker IDs.
 type group struct {
 	ID          string        `xml:"id,attr"`
 	AirPlayName string        `xml:"airplay_name,attr"`
+	Port        uint16        `xml:"port,attr"`
 	Speakers    []groupMember `xml:"speaker"`
 }
 
@@ -117,7 +118,7 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 			dirty = true
 		}
 		if s.Port == 0 {
-			port, err := r.nextPort(r.doc.Speakers)
+			port, err := r.nextPort(r.doc)
 			if err != nil {
 				return nil, err
 			}
@@ -125,6 +126,33 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 			dirty = true
 		}
 		s.Endpoint.Path = normalizePath(s.Endpoint.Path)
+	}
+	seenGroups := make(map[string]bool, len(r.doc.Groups))
+	for i := range r.doc.Groups {
+		g := &r.doc.Groups[i]
+		if g.ID == "" || seenGroups[g.ID] {
+			return nil, fmt.Errorf("config %s has missing or duplicate group id", path)
+		}
+		seenGroups[g.ID] = true
+		members := make(map[string]bool, len(g.Speakers))
+		for _, member := range g.Speakers {
+			if !seenIDs[member.ID] || members[member.ID] {
+				return nil, fmt.Errorf("group %q has unknown or duplicate speaker %q", g.ID, member.ID)
+			}
+			members[member.ID] = true
+		}
+		if g.AirPlayName == "" {
+			g.AirPlayName = g.ID
+			dirty = true
+		}
+		if g.Port == 0 {
+			port, err := r.nextPort(r.doc)
+			if err != nil {
+				return nil, err
+			}
+			g.Port = port
+			dirty = true
+		}
 	}
 	if dirty {
 		if err := r.save(r.doc); err != nil {
@@ -139,6 +167,8 @@ func (r *registry) speakers() []speaker {
 	copy(out, r.doc.Speakers)
 	return out
 }
+
+func (r *registry) groups() []group { return r.cloneDocument().Groups }
 
 func (r *registry) speaker(id string) (speaker, bool) {
 	for _, s := range r.doc.Speakers {
@@ -178,7 +208,7 @@ func (r *registry) upsertOutbound(info discovery.ClientInfo) (speaker, bool, err
 		return *s, false, nil
 	}
 
-	port, err := r.nextPort(next.Speakers)
+	port, err := r.nextPort(next)
 	if err != nil {
 		return speaker{}, false, err
 	}
@@ -237,7 +267,7 @@ func (r *registry) upsertInbound(clientID, name string) (speaker, bool, error) {
 	}
 
 	next := r.cloneDocument()
-	port, err := r.nextPort(next.Speakers)
+	port, err := r.nextPort(next)
 	if err != nil {
 		return speaker{}, false, err
 	}
@@ -305,12 +335,13 @@ func speakerID(name string) string {
 	return strings.Trim(out.String(), "-")
 }
 
-func (r *registry) nextPort(speakers []speaker) (uint16, error) {
-	used := make(map[uint16]bool, len(speakers))
-	for _, s := range speakers {
-		if s.Port != 0 {
-			used[s.Port] = true
-		}
+func (r *registry) nextPort(doc registryDocument) (uint16, error) {
+	used := make(map[uint16]bool, len(doc.Speakers)+len(doc.Groups))
+	for _, s := range doc.Speakers {
+		used[s.Port] = true
+	}
+	for _, g := range doc.Groups {
+		used[g.Port] = true
 	}
 	for port := int(r.portBase); port+int(r.portRange)-1 <= 65535; port += int(r.portRange) {
 		if !used[uint16(port)] {

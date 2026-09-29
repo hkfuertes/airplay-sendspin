@@ -9,9 +9,9 @@ import (
 )
 
 // selectFormat chooses one stereo Sendspin output format for an AirPlay 1
-// target. Prefer raw PCM; within that codec, prefer 44.1 kHz to avoid
-// resampling and use another declared rate only when needed.
-func selectFormat(support *protocol.PlayerV1Support) (pcm.Format, error) {
+// target. A supported prefer (a group member's shared format) wins; otherwise
+// prefer raw PCM and, within that codec, 44.1 kHz to avoid resampling.
+func selectFormat(support *protocol.PlayerV1Support, prefer pcm.Format) (pcm.Format, error) {
 	if support == nil {
 		return pcm.Format{}, fmt.Errorf("player did not announce audio formats")
 	}
@@ -26,6 +26,9 @@ func selectFormat(support *protocol.PlayerV1Support) (pcm.Format, error) {
 			continue
 		}
 		score := formatScore(format, advertised.Codec)
+		if format == prefer {
+			score -= 100_000
+		}
 		if score < bestScore {
 			best, bestScore = format, score
 		}
