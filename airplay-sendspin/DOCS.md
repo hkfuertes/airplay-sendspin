@@ -1,13 +1,20 @@
 # AirPlay Sendspin
 
-Announces every Sendspin speaker on your network as its own AirPlay target,
-plus any groups you define.
+By default, each discovered Sendspin speaker is advertised as an AirPlay target.
+You can also define AirPlay groups that play through several speakers in sync.
 
-Speakers are found automatically and written to `config.xml` in this add-on's
-config folder (`/addon_configs/<id>_airplay_sendspin/` in the File editor or
-Samba add-ons). Edit it to rename targets, hide a speaker (`hidden="true"`),
-change the name suffix (`airplay_suffix`) or add `<groups>`, then restart the
-add-on. See the project README for the full format.
+The bridge writes discovered speakers to `config.xml` in this add-on's config
+folder. For a GitHub repository, Supervisor mounts that folder at
+`/addon_configs/<repository-id>_airplay_sendspin/` in File editor or Samba,
+and at `/config` inside this add-on. Edit `config.xml` to rename targets, change
+the shared suffix (`airplay_suffix`), or add `<groups>`, then restart the
+add-on.
 
+Set `hidden="true"` on a speaker to remove its individual AirPlay target. A
+hidden speaker still feeds any group that contains it; outside all groups the
+bridge leaves it free for another Sendspin server.
+
+The release workflow is configured to build native amd64 and aarch64 images.
 The add-on uses the host network: AirPlay ports start at 7000 and the inbound
-Sendspin server listens on 8927.
+Sendspin server listens on 8927. See the project README for the full XML
+format.
