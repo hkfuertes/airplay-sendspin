@@ -72,3 +72,20 @@ libraop before building the bridge binary; no vendor source is checked in.
   speaker's own target and one of its groups play at once, the speaker mixes
   both. Group volume moves the members' average and keeps their differences (as
   in aiosendspin); at 0 or 100 every member ends up equal.
+
+## AI-assisted development
+
+This project was developed with generative-AI assistance. AI was used to inspect
+and discuss the codebase, draft and edit code, tests, and documentation, and
+help investigate runtime and CI issues. Human maintainers review changes before
+merging and remain responsible for releases, security, and support.
+
+## Acknowledgements
+
+- [libraop](https://github.com/philippe44/libraop) (AirCast/RAOP), by
+  Philippe44, provides the AirPlay receiver and PCM decoding foundation.
+- [sendspin-go](https://github.com/Sendspin/sendspin-go) provides the Sendspin
+  protocol implementation, sessions, and discovery support.
+- [HashiCorp mDNS](https://github.com/hashicorp/mdns) provides local multicast
+  DNS advertisement and discovery.
+- [Home Assistant](https://www.home-assistant.io/) provides the add-on platform.
