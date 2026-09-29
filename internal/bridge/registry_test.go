@@ -55,29 +55,109 @@ func TestRegistryPersistsDiscoveredSpeaker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `client_id="echo-kitchen"`) || !strings.Contains(string(data), `path="/sendspin"`) {
-		t.Fatalf("config.xml missing persisted identity or endpoint:\n%s", data)
+	if !strings.Contains(string(data), `client_id="echo-kitchen"`) || !strings.Contains(string(data), `path="/sendspin"`) || !strings.Contains(string(data), `airplay_suffix=" (Sendspin)"`) {
+		t.Fatalf("config.xml missing persisted identity, endpoint, or suffix:\n%s", data)
 	}
 }
 
-func TestRegistryPreservesInactiveGroups(t *testing.T) {
+func TestRegistryAirPlaySuffixAllowsEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.xml")
-	if err := os.WriteFile(path, []byte(`<?xml version="1.0"?>
-<airplay-sendspin version="1"><speakers></speakers><groups><group id="whole-house" airplay_name="Toda la casa"><speaker id="cocina"/></group></groups></airplay-sendspin>`), 0o644); err != nil {
+	data := `<?xml version="1.0"?><airplay-sendspin version="1" airplay_suffix=""></airplay-sendspin>`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r, err := loadRegistry(path, 7000, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.upsertOutbound(discovery.ClientInfo{Name: "Cocina", Host: "192.0.2.10", Port: 8928}); err != nil {
+	if got := r.airPlaySuffix(); got != "" {
+		t.Fatalf("suffix = %q, want empty", got)
+	}
+}
+
+func TestRegistryDelayPersistsAndHonorsConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.xml")
+	r, err := loadRegistry(path, 7000, 10)
+	if err != nil {
 		t.Fatal(err)
+	}
+	s, _, err := r.upsertOutbound(discovery.ClientInfo{Name: "Dot", Host: "192.0.2.10", Port: 8928})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.delay(s.ID); err != nil || got != 0 {
+		t.Fatalf("initial delay = (%d, %v), want (0, nil)", got, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `group id="whole-house"`) || !strings.Contains(string(data), `speaker id="cocina"`) {
+	if !strings.Contains(string(data), `delay_ms="0"`) {
+		t.Fatalf("config.xml missing initial zero delay:\n%s", data)
+	}
+
+	// A hand-written value is authoritative after discovery.
+	data = []byte(strings.Replace(string(data), `delay_ms="0"`, `delay_ms="100"`, 1))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err = loadRegistry(path, 7000, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.delay(s.ID); err != nil || got != 100 {
+		t.Fatalf("configured delay = (%d, %v), want (100, nil)", got, err)
+	}
+}
+
+func TestRegistryRejectsInvalidDelay(t *testing.T) {
+	for _, delay := range []string{"-1", "501"} {
+		t.Run(delay, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.xml")
+			data := `<?xml version="1.0"?><airplay-sendspin version="1"><speakers><speaker id="dot" direction="outbound" port="7000" delay_ms="` + delay + `"/></speakers></airplay-sendspin>`
+			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadRegistry(path, 7000, 10); err == nil {
+				t.Fatalf("loaded delay_ms=%s", delay)
+			}
+		})
+	}
+}
+
+func TestRegistryGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.xml")
+	config := func(members string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`<?xml version="1.0"?>
+<airplay-sendspin version="1"><speakers><speaker id="cocina" direction="inbound" port="7000"/></speakers><groups><group id="whole-house" airplay_name="Toda la casa">`+members+`</group></groups></airplay-sendspin>`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bad := range []string{`<speaker id="salon"/>`, `<speaker id="cocina"/><speaker id="cocina"/>`} {
+		config(bad)
+		if _, err := loadRegistry(path, 7000, 10); err == nil {
+			t.Fatalf("loaded group with members %s", bad)
+		}
+	}
+
+	config(`<speaker id="cocina"/>`)
+	r, err := loadRegistry(path, 7000, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groups := r.groups(); len(groups) != 1 || groups[0].Port != 7010 {
+		t.Fatalf("groups = %+v, want whole-house on the next free port", groups)
+	}
+	speaker, _, err := r.upsertOutbound(discovery.ClientInfo{Name: "Salon", Host: "192.0.2.10", Port: 8928})
+	if err != nil || speaker.Port != 7020 {
+		t.Fatalf("discovered speaker = (%+v, %v), want port 7020", speaker, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `group id="whole-house"`) || !strings.Contains(string(data), `port="7010"`) {
 		t.Fatalf("discovery erased group:\n%s", data)
 	}
 }

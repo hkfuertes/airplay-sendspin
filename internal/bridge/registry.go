@@ -9,26 +9,30 @@ import (
 	"unicode"
 
 	"github.com/Sendspin/sendspin-go/pkg/discovery"
+	"github.com/hkfuertes/goplay2-sendspin/internal/pcm"
 )
 
 const (
-	defaultConfigPath = "config.xml"
-	directionInbound  = "inbound"
-	directionOutbound = "outbound"
+	defaultConfigPath    = "config.xml"
+	defaultAirPlaySuffix = " (Sendspin)"
+	directionInbound     = "inbound"
+	directionOutbound    = "outbound"
 )
 
 type registryDocument struct {
-	XMLName  xml.Name  `xml:"airplay-sendspin"`
-	Version  string    `xml:"version,attr"`
-	Speakers []speaker `xml:"speakers>speaker"`
-	Groups   []group   `xml:"groups>group"`
+	XMLName       xml.Name  `xml:"airplay-sendspin"`
+	Version       string    `xml:"version,attr"`
+	AirPlaySuffix *string   `xml:"airplay_suffix,attr,omitempty"`
+	Speakers      []speaker `xml:"speakers>speaker"`
+	Groups        []group   `xml:"groups>group"`
 }
 
-// group is deliberately inert for now. Keeping its references in the registry
-// lets future grouping reuse stable speaker IDs without discovery erasing them.
+// group is one extra AirPlay target that plays in sync on every member
+// speaker. Groups are edited by hand; members are stable speaker IDs.
 type group struct {
 	ID          string        `xml:"id,attr"`
 	AirPlayName string        `xml:"airplay_name,attr"`
+	Port        uint16        `xml:"port,attr"`
 	Speakers    []groupMember `xml:"speaker"`
 }
 
@@ -45,6 +49,7 @@ type speaker struct {
 	AirPlayName string   `xml:"airplay_name,attr"`
 	Direction   string   `xml:"direction,attr"`
 	Port        uint16   `xml:"port,attr"`
+	DelayMs     *int     `xml:"delay_ms,attr,omitempty"` // group audio hold-back; nil until first hello
 	Endpoint    endpoint `xml:"endpoint"`
 }
 
@@ -70,11 +75,12 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 		path:      path,
 		portBase:  portBase,
 		portRange: portRange,
-		doc:       registryDocument{Version: "1"},
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		suffix := defaultAirPlaySuffix
+		r.doc = registryDocument{Version: "1", AirPlaySuffix: &suffix}
 		return r, nil
 	}
 	if err != nil {
@@ -91,6 +97,11 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 	}
 
 	dirty := false
+	if r.doc.AirPlaySuffix == nil {
+		suffix := defaultAirPlaySuffix
+		r.doc.AirPlaySuffix = &suffix
+		dirty = true
+	}
 	seenIDs := make(map[string]bool, len(r.doc.Speakers))
 	seenClientIDs := make(map[string]bool, len(r.doc.Speakers))
 	for i := range r.doc.Speakers {
@@ -117,14 +128,44 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 			dirty = true
 		}
 		if s.Port == 0 {
-			port, err := r.nextPort(r.doc.Speakers)
+			port, err := r.nextPort(r.doc)
 			if err != nil {
 				return nil, err
 			}
 			s.Port = port
 			dirty = true
 		}
+		if s.DelayMs != nil && (*s.DelayMs < 0 || int64(*s.DelayMs) > pcm.MaxDelay.Milliseconds()) {
+			return nil, fmt.Errorf("speaker %q has delay_ms %d, want 0..%d", s.ID, *s.DelayMs, pcm.MaxDelay.Milliseconds())
+		}
 		s.Endpoint.Path = normalizePath(s.Endpoint.Path)
+	}
+	seenGroups := make(map[string]bool, len(r.doc.Groups))
+	for i := range r.doc.Groups {
+		g := &r.doc.Groups[i]
+		if g.ID == "" || seenGroups[g.ID] {
+			return nil, fmt.Errorf("config %s has missing or duplicate group id", path)
+		}
+		seenGroups[g.ID] = true
+		members := make(map[string]bool, len(g.Speakers))
+		for _, member := range g.Speakers {
+			if !seenIDs[member.ID] || members[member.ID] {
+				return nil, fmt.Errorf("group %q has unknown or duplicate speaker %q", g.ID, member.ID)
+			}
+			members[member.ID] = true
+		}
+		if g.AirPlayName == "" {
+			g.AirPlayName = g.ID
+			dirty = true
+		}
+		if g.Port == 0 {
+			port, err := r.nextPort(r.doc)
+			if err != nil {
+				return nil, err
+			}
+			g.Port = port
+			dirty = true
+		}
 	}
 	if dirty {
 		if err := r.save(r.doc); err != nil {
@@ -138,6 +179,15 @@ func (r *registry) speakers() []speaker {
 	out := make([]speaker, len(r.doc.Speakers))
 	copy(out, r.doc.Speakers)
 	return out
+}
+
+func (r *registry) groups() []group { return r.cloneDocument().Groups }
+
+func (r *registry) airPlaySuffix() string {
+	if r.doc.AirPlaySuffix == nil {
+		return defaultAirPlaySuffix
+	}
+	return *r.doc.AirPlaySuffix
 }
 
 func (r *registry) speaker(id string) (speaker, bool) {
@@ -178,7 +228,7 @@ func (r *registry) upsertOutbound(info discovery.ClientInfo) (speaker, bool, err
 		return *s, false, nil
 	}
 
-	port, err := r.nextPort(next.Speakers)
+	port, err := r.nextPort(next)
 	if err != nil {
 		return speaker{}, false, err
 	}
@@ -219,6 +269,24 @@ func (r *registry) setClientID(id, clientID string) error {
 	return fmt.Errorf("unknown speaker %q", id)
 }
 
+// delay returns the speaker's delay_ms, writing the initial zero to config.xml
+// when a speaker first says hello. config.xml wins after that.
+func (r *registry) delay(id string) (int, error) {
+	next := r.cloneDocument()
+	for i, s := range next.Speakers {
+		if s.ID != id {
+			continue
+		}
+		if s.DelayMs != nil {
+			return *s.DelayMs, nil
+		}
+		delay := 0
+		next.Speakers[i].DelayMs = &delay
+		return delay, r.save(next)
+	}
+	return 0, fmt.Errorf("unknown speaker %q", id)
+}
+
 // upsertInbound claims a player that connected to the bridge's advertised
 // Sendspin server. An existing outbound record is deliberately not reused:
 // one speaker gets exactly one connection direction.
@@ -237,7 +305,7 @@ func (r *registry) upsertInbound(clientID, name string) (speaker, bool, error) {
 	}
 
 	next := r.cloneDocument()
-	port, err := r.nextPort(next.Speakers)
+	port, err := r.nextPort(next)
 	if err != nil {
 		return speaker{}, false, err
 	}
@@ -305,12 +373,13 @@ func speakerID(name string) string {
 	return strings.Trim(out.String(), "-")
 }
 
-func (r *registry) nextPort(speakers []speaker) (uint16, error) {
-	used := make(map[uint16]bool, len(speakers))
-	for _, s := range speakers {
-		if s.Port != 0 {
-			used[s.Port] = true
-		}
+func (r *registry) nextPort(doc registryDocument) (uint16, error) {
+	used := make(map[uint16]bool, len(doc.Speakers)+len(doc.Groups))
+	for _, s := range doc.Speakers {
+		used[s.Port] = true
+	}
+	for _, g := range doc.Groups {
+		used[g.Port] = true
 	}
 	for port := int(r.portBase); port+int(r.portRange)-1 <= 65535; port += int(r.portRange) {
 		if !used[uint16(port)] {

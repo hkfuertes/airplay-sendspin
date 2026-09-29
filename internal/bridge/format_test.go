@@ -11,9 +11,19 @@ func TestSelectFormat(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		support *protocol.PlayerV1Support
+		prefer  pcm.Format
 		want    pcm.Format
 		wantErr bool
 	}{
+		{
+			name: "group format beats native rate",
+			support: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
+				{Codec: "pcm", Channels: 2, SampleRate: 44100, BitDepth: 16},
+				{Codec: "pcm", Channels: 2, SampleRate: 48000, BitDepth: 16},
+			}},
+			prefer: pcm.GroupFormat,
+			want:   pcm.GroupFormat,
+		},
 		{
 			name: "PCM beats native FLAC",
 			support: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
@@ -51,7 +61,7 @@ func TestSelectFormat(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := selectFormat(tc.support)
+			got, err := selectFormat(tc.support, tc.prefer)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("selectFormat() error = %v, want error = %v", err, tc.wantErr)
 			}

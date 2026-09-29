@@ -1,0 +1,127 @@
+diff --git a/pkg/sendspin/server.go b/pkg/sendspin/server.go
+index b1a3c40..d4f18b4 100644
+--- a/pkg/sendspin/server.go
++++ b/pkg/sendspin/server.go
+@@ -155,7 +155,7 @@ func NewServer(config ServerConfig) (*Server, error) {
+ 			},
+ 		},
+ 		clients:    make(map[string]*ServerClient),
+-		clockStart: time.Now(),
++		clockStart: clockEpoch,
+ 		stopChan:   make(chan struct{}),
+ 	}
+ 
+@@ -420,7 +420,12 @@ func (s *Server) Stop() {
+ 	})
+ }
+ 
+-// getClockMicros returns server uptime in microseconds (monotonic, not wall clock).
++// clockEpoch is shared by every Server in the process: together with the
++// chunk-grid timeline, one playback timestamp names the same instant on all
++// of them, so TimedAudioSource can keep players on different servers in sync.
++var clockEpoch = time.Now()
++
++// getClockMicros returns process uptime in microseconds (monotonic, not wall clock).
+ func (s *Server) getClockMicros() int64 {
+ 	return time.Since(s.clockStart).Microseconds()
+ }
+diff --git a/pkg/sendspin/server_stream.go b/pkg/sendspin/server_stream.go
+index ab1e2c6..f348e9f 100644
+--- a/pkg/sendspin/server_stream.go
++++ b/pkg/sendspin/server_stream.go
+@@ -38,9 +38,11 @@ func audioReady(helloAt, initialSyncAt, now int64) bool {
+ // chunk: receivers that place audio by timestamp (EchoLocal) otherwise get a
+ // gap or an overlap at every tick's jitter. The ticker only paces: a late tick
+ // is caught up, and a stall past the whole buffer starts a new timeline.
++// Timelines start on the process-wide chunk grid, so every server stamps the
++// same chunk boundaries.
+ func timeline(next, now int64) (int64, int) {
+ 	if next < now {
+-		next = now + aheadUs
++		next = (now + aheadUs + chunkUs/2) / chunkUs * chunkUs
+ 	}
+ 	limit := now + aheadUs + chunkUs/2
+ 	if next > limit {
+@@ -86,7 +88,7 @@ func (s *Server) generateAndSendChunk(playbackTime int64) {
+ 	bitDepth := s.audioBitDepth()
+ 	chunkSamples := (s.audioSource.SampleRate() * ChunkDurationMs) / 1000
+ 	samples := make([]int32, chunkSamples*s.audioSource.Channels())
+-	n, err := s.audioSource.Read(samples)
++	n, err := readSource(s.audioSource, samples, playbackTime)
+ 	if err != nil {
+ 		s.consecutiveReadErrs++
+ 		// Log every error for the first few, then throttle.
+@@ -130,7 +132,7 @@ func (s *Server) generateAndSendClientChunks(playbackTime int64) {
+ 		}
+ 		chunkSamples := (source.SampleRate() * ChunkDurationMs) / 1000
+ 		samples := make([]int32, chunkSamples*source.Channels())
+-		n, err := source.Read(samples)
++		n, err := readSource(source, samples, playbackTime)
+ 		if err != nil {
+ 			log.Printf("Error reading audio source for %s: %v", c.name, err)
+ 			continue
+diff --git a/pkg/sendspin/server_stream_test.go b/pkg/sendspin/server_stream_test.go
+index 8450a27..a004a2d 100644
+--- a/pkg/sendspin/server_stream_test.go
++++ b/pkg/sendspin/server_stream_test.go
+@@ -25,6 +25,25 @@ func (*chunkSource) Channels() int                      { return 2 }
+ func (*chunkSource) Metadata() (string, string, string) { return "", "", "" }
+ func (*chunkSource) Close() error                       { return nil }
+ 
++type timedSource struct {
++	chunkSource
++	at int64
++}
++
++func (s *timedSource) ReadAt(samples []int32, playbackTime int64) (int, error) {
++	s.at = playbackTime
++	return s.Read(samples)
++}
++
++func TestTimedSourceReadsByPlaybackTime(t *testing.T) {
++	source := &timedSource{}
++	server := &Server{config: ServerConfig{BitDepth: 16}, audioSource: source, clients: map[string]*ServerClient{}}
++	server.generateAndSendChunk(40_000)
++	if source.at != 40_000 || source.reads != 1 {
++		t.Fatalf("ReadAt(%d) reads=%d, want ReadAt(40000) once", source.at, source.reads)
++	}
++}
++
+ func TestGenerateAndSendClientChunksUsesIsolatedSources(t *testing.T) {
+ 	left, right := &chunkSource{value: 123}, &chunkSource{value: -456}
+ 	server := &Server{
+@@ -110,8 +129,8 @@ func TestTimelineIsSampleContinuous(t *testing.T) {
+ 			t.Fatalf("chunk %d at %d, want %d", i, sent[i], sent[i-1]+chunkUs)
+ 		}
+ 	}
+-	now += 2 * aheadUs // stall past the whole buffer: new timeline
+-	if start, n := timeline(next, now); start != now+aheadUs || n != 1 {
+-		t.Fatalf("after stall got (%d, %d), want (%d, 1)", start, n, now+aheadUs)
++	now += 2 * aheadUs // stall past the whole buffer: new timeline on the chunk grid
++	if start, n := timeline(next, now); start%chunkUs != 0 || start-(now+aheadUs) > chunkUs/2 || now+aheadUs-start > chunkUs/2 || n != 1 {
++		t.Fatalf("after stall got (%d, %d), want grid chunk near %d", start, n, now+aheadUs)
+ 	}
+ }
+diff --git a/pkg/sendspin/source.go b/pkg/sendspin/source.go
+index 05aa9df..67cdf61 100644
+--- a/pkg/sendspin/source.go
++++ b/pkg/sendspin/source.go
+@@ -20,3 +20,18 @@ type AudioSource interface {
+ 	// Close closes the audio source
+ 	Close() error
+ }
++
++// TimedAudioSource serves the chunk for a playback timestamp. Servers share a
++// clock and chunk grid, so sources keyed by timestamp (a multiroom group) give
++// players on different servers the same audio for the same instant.
++type TimedAudioSource interface {
++	AudioSource
++	ReadAt(samples []int32, playbackTime int64) (int, error)
++}
++
++func readSource(source AudioSource, samples []int32, playbackTime int64) (int, error) {
++	if timed, ok := source.(TimedAudioSource); ok {
++		return timed.ReadAt(samples, playbackTime)
++	}
++	return source.Read(samples)
++}
