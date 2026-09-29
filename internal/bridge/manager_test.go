@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Sendspin/sendspin-go/pkg/sendspin"
+	"github.com/hkfuertes/goplay2-sendspin/internal/pcm"
 )
 
 type testVolumeControl struct {
@@ -91,5 +92,21 @@ func TestVirtualMACIsStableAndLocallyAdministered(t *testing.T) {
 	}
 	if first[0]&1 != 0 || first[0]&2 == 0 {
 		t.Fatalf("virtual MAC is not locally-administered unicast: %02x", first[0])
+	}
+}
+
+func TestHiddenSpeakerOnlyJoinsForGroups(t *testing.T) {
+	m := &Manager{memberGroups: map[string][]*pcm.Group{"grouped": {nil}}}
+	for _, test := range []struct {
+		s    speaker
+		want bool
+	}{
+		{speaker{ID: "solo"}, true},
+		{speaker{ID: "solo", Hidden: true}, false},
+		{speaker{ID: "grouped", Hidden: true}, true},
+	} {
+		if got := m.wanted(test.s); got != test.want {
+			t.Errorf("wanted(%+v) = %v, want %v", test.s, got, test.want)
+		}
 	}
 }

@@ -2,7 +2,8 @@ package pcm
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../third_party/libraop/libcodecs/targets/include/soxr
-#cgo LDFLAGS: -L${SRCDIR}/../../third_party/libraop/libcodecs/targets/linux/x86_64 -lsoxr -lm
+#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../third_party/libraop/libcodecs/targets/linux/x86_64 -lsoxr -lm
+#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../third_party/libraop/libcodecs/targets/linux/aarch64 -lsoxr -lm
 #include <soxr.h>
 */
 import "C"

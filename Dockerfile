@@ -51,7 +51,7 @@ RUN go vet ./cmd/goplay2-sendspin ./internal/... \
  && cd third_party/sendspin-go \
  && go test -count=1 ./pkg/sendspin ./pkg/discovery
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
@@ -64,3 +64,10 @@ COPY --from=build /usr/local/bin/airplay-sendspin /usr/local/bin/airplay-sendspi
 RUN /usr/local/bin/airplay-sendspin -h >/dev/null 2>&1
 
 CMD ["/usr/local/bin/airplay-sendspin", "-config", "/data/config.xml"]
+
+# Home Assistant add-on: config.xml lives in the user-editable addon_config.
+FROM runtime AS addon
+ARG BUILD_ARCH
+ARG BUILD_VERSION
+LABEL io.hass.type="addon" io.hass.arch="${BUILD_ARCH}" io.hass.version="${BUILD_VERSION}"
+CMD ["/usr/local/bin/airplay-sendspin", "-config", "/config/config.xml"]

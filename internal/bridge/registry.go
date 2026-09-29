@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -49,6 +50,7 @@ type speaker struct {
 	AirPlayName string   `xml:"airplay_name,attr"`
 	Direction   string   `xml:"direction,attr"`
 	Port        uint16   `xml:"port,attr"`
+	Hidden      bool     `xml:"hidden,attr"`             // no own AirPlay target; still plays its groups
 	DelayMs     *int     `xml:"delay_ms,attr,omitempty"` // group audio hold-back; nil until first hello
 	Endpoint    endpoint `xml:"endpoint"`
 }
@@ -96,11 +98,9 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 		r.doc.Version = "1"
 	}
 
-	dirty := false
 	if r.doc.AirPlaySuffix == nil {
 		suffix := defaultAirPlaySuffix
 		r.doc.AirPlaySuffix = &suffix
-		dirty = true
 	}
 	seenIDs := make(map[string]bool, len(r.doc.Speakers))
 	seenClientIDs := make(map[string]bool, len(r.doc.Speakers))
@@ -118,14 +118,12 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 		}
 		if s.Direction == "" {
 			s.Direction = directionOutbound
-			dirty = true
 		}
 		if s.Direction != directionInbound && s.Direction != directionOutbound {
 			return nil, fmt.Errorf("speaker %q has invalid direction %q", s.ID, s.Direction)
 		}
 		if s.AirPlayName == "" {
 			s.AirPlayName = s.ID
-			dirty = true
 		}
 		if s.Port == 0 {
 			port, err := r.nextPort(r.doc)
@@ -133,7 +131,6 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 				return nil, err
 			}
 			s.Port = port
-			dirty = true
 		}
 		if s.DelayMs != nil && (*s.DelayMs < 0 || int64(*s.DelayMs) > pcm.MaxDelay.Milliseconds()) {
 			return nil, fmt.Errorf("speaker %q has delay_ms %d, want 0..%d", s.ID, *s.DelayMs, pcm.MaxDelay.Milliseconds())
@@ -156,7 +153,6 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 		}
 		if g.AirPlayName == "" {
 			g.AirPlayName = g.ID
-			dirty = true
 		}
 		if g.Port == 0 {
 			port, err := r.nextPort(r.doc)
@@ -164,10 +160,11 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 				return nil, err
 			}
 			g.Port = port
-			dirty = true
 		}
 	}
-	if dirty {
+	// Rewrite whenever normalizing changed the file: filled-in defaults and new
+	// attributes (e.g. hidden="false") become visible for hand edits.
+	if normalized, err := encodeRegistry(r.doc); err != nil || !bytes.Equal(normalized, data) {
 		if err := r.save(r.doc); err != nil {
 			return nil, err
 		}
@@ -389,13 +386,21 @@ func (r *registry) nextPort(doc registryDocument) (uint16, error) {
 	return 0, fmt.Errorf("no AirPlay port range left")
 }
 
-func (r *registry) save(doc registryDocument) error {
+func encodeRegistry(doc registryDocument) ([]byte, error) {
 	doc.Version = "1"
 	data, err := xml.MarshalIndent(doc, "", "  ")
 	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), append(data, '\n')...), nil
+}
+
+func (r *registry) save(doc registryDocument) error {
+	doc.Version = "1"
+	data, err := encodeRegistry(doc)
+	if err != nil {
 		return fmt.Errorf("encode config %s: %w", r.path, err)
 	}
-	data = append([]byte(xml.Header), append(data, '\n')...)
 
 	dir := filepath.Dir(r.path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

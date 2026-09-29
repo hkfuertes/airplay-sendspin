@@ -1,8 +1,9 @@
 # AirPlay Sendspin
 
-One independent AirPlay 1 target per Sendspin speaker. AirPlay PCM stays local:
-libraop decodes it, then the bridge sends it directly to that speaker's
-Sendspin session.
+AirPlay 1 targets for Sendspin speakers and groups. By default, every
+discovered speaker gets its own target; set `hidden="true"` to reserve it for
+groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
+it directly to that speaker's Sendspin session.
 
 ```sh
 git clone https://github.com/hkfuertes/airplay-sendspin.git
@@ -10,6 +11,17 @@ cd airplay-sendspin
 docker compose up -d --build
 # The image build runs vet and all Go tests.
 ```
+
+### Home Assistant add-on
+
+Add this repository under Settings → Add-ons → Add-on store → Repositories,
+then install **AirPlay Sendspin**. Bump `airplay-sendspin/config.yaml`'s
+`version` and merge it to `main` to publish matching native amd64 and aarch64
+images; the workflow builds one architecture at a time. Home Assistant pulls
+the image tag with that version. As speakers are discovered, the bridge writes
+`config.xml` in the add-on's config folder. The repository and its GHCR packages
+must be public (or the registry added to Supervisor) for Home Assistant to fetch
+them.
 
 ## `state/config.xml`
 
@@ -25,7 +37,8 @@ libraop before building the bridge binary; no vendor source is checked in.
 <airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
   <speakers>
     <speaker id="cocina" client_id="echo-kitchen"
-             airplay_name="Cocina" direction="outbound" port="7000" delay_ms="0">
+             airplay_name="Cocina" direction="outbound" port="7000"
+             hidden="false" delay_ms="0">
       <endpoint instance="kitchen._sendspin._tcp.local."
                 host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
@@ -46,11 +59,15 @@ libraop before building the bridge binary; no vendor source is checked in.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.
 - Exactly one direction is allowed per speaker.
+- `hidden="true"` stops advertising the speaker's own AirPlay target. It still
+  plays its groups; outside any group the bridge leaves the player alone (no
+  Sendspin session), so another server can use it.
 - `delay_ms` holds back only that speaker's group audio (0–500 ms). The first
   hello writes `delay_ms="0"`; after that the XML value is authoritative.
 - Each `<group>` is written by hand and is advertised as its own AirPlay target
   (`port` is filled in if missing). It plays in sync on every member `speaker
-  id`, at 48 kHz/16-bit. Members stay advertised on their own; if a speaker's
-  own target and one of its groups play at once, the speaker mixes both. Group
-  volume moves the members' average and keeps their differences (as in
-  aiosendspin); at 0 or 100 every member ends up equal.
+  id`, at 48 kHz/16-bit. Visible members stay advertised on their own; hidden
+  members are not advertised but remain connected to feed their groups. If a
+  speaker's own target and one of its groups play at once, the speaker mixes
+  both. Group volume moves the members' average and keeps their differences (as
+  in aiosendspin); at 0 or 100 every member ends up equal.
