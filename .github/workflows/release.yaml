@@ -1,0 +1,60 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  binary:
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - { arch: amd64, platform: linux/amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$version" = "$(sed -n 's/^version: *"\(.*\)"$/\1/p' airplay-sendspin/config.yaml)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - run: |
+          docker buildx build \
+            --platform "${{ matrix.platform }}" \
+            --target binary \
+            --output type=local,dest=dist \
+            .
+          test -x dist/airplay-sendspin
+          tar -C dist -czf "airplay-sendspin_${{ steps.version.outputs.version }}_linux_${{ matrix.arch }}.tar.gz" airplay-sendspin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: airplay-sendspin_*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: binary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: release
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.tar.gz \
+              --title "AirPlay Sendspin ${GITHUB_REF_NAME#v}" \
+              --generate-notes
+          fi

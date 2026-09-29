@@ -51,6 +51,9 @@ RUN go vet ./cmd/goplay2-sendspin ./internal/... \
  && cd third_party/sendspin-go \
  && go test -count=1 ./pkg/sendspin ./pkg/discovery
 
+FROM scratch AS binary
+COPY --from=build /usr/local/bin/airplay-sendspin /airplay-sendspin
+
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
