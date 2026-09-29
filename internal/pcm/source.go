@@ -3,7 +3,6 @@ package pcm
 
 import (
 	"io"
-	"log"
 	"sync"
 )
 
@@ -29,12 +28,6 @@ type Source struct {
 	closed     bool
 	sampleRate int
 	bitDepth   int
-
-	pushedSamples uint64
-	readSamples   uint64
-	silentSamples uint64
-	nextPushLog   uint64
-	nextReadLog   uint64
 }
 
 // New creates a 44.1 kHz source that retains at most bufferFrames stereo frames.
@@ -59,11 +52,9 @@ func NewAtFormat(bufferFrames, sampleRate, bitDepth int) *Source {
 		bitDepth = 24
 	}
 	return &Source{
-		samples:     make([]int32, bufferFrames*Channels),
-		sampleRate:  sampleRate,
-		bitDepth:    bitDepth,
-		nextPushLog: uint64(sampleRate * Channels),
-		nextReadLog: uint64(sampleRate * Channels),
+		samples:    make([]int32, bufferFrames*Channels),
+		sampleRate: sampleRate,
+		bitDepth:   bitDepth,
 	}
 }
 
@@ -92,26 +83,13 @@ func (s *Source) PushS16(pcm []int16) {
 		s.size -= overflow
 	}
 
-	peak := int32(0)
 	for _, sample := range pcm {
-		value := int32(sample)
-		if value < 0 {
-			value = -value
-		}
-		if value > peak {
-			peak = value
-		}
 		stored := int32(sample)
 		if s.bitDepth > 16 {
 			stored <<= s.bitDepth - 16
 		}
 		s.samples[(s.head+s.size)%capacity] = stored
 		s.size++
-	}
-	s.pushedSamples += uint64(len(pcm))
-	if s.pushedSamples >= s.nextPushLog {
-		log.Printf("[DEBUG-b7c1] PCM push: frames=%d peak=%d queued=%d", s.pushedSamples/Channels, peak, s.size/Channels)
-		s.nextPushLog += uint64(s.sampleRate * Channels)
 	}
 }
 
@@ -130,12 +108,6 @@ func (s *Source) Read(dst []int32) (int, error) {
 		s.head = (s.head + 1) % len(s.samples)
 	}
 	s.size -= n
-	s.readSamples += uint64(n)
-	s.silentSamples += uint64(len(dst) - n)
-	if s.readSamples+s.silentSamples >= s.nextReadLog {
-		log.Printf("[DEBUG-b7c1] PCM pull: frames=%d audio=%d silence=%d queued=%d", (s.readSamples+s.silentSamples)/Channels, s.readSamples/Channels, s.silentSamples/Channels, s.size/Channels)
-		s.nextReadLog += uint64(s.sampleRate * Channels)
-	}
 	s.mu.Unlock()
 
 	clear(dst[n:])

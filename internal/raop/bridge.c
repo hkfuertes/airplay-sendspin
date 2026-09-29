@@ -1,18 +1,19 @@
 #include "bridge.h"
 
 #include <arpa/inet.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "raop_server.h"
 #include "cross_log.h"
 
-// [DEBUG-a4f2] Temporary RTSP lifecycle logging for the live AirPlay setup failure.
 log_level raop_loglevel = lINFO;
 log_level util_loglevel = lWARN;
 
 extern void goRaopPCM(uintptr_t owner, const int16_t *samples, size_t frames);
 extern void goRaopEvent(uintptr_t owner, int event);
+extern void goRaopVolume(uintptr_t owner, double volume);
 
 struct bridge_receiver {
 	struct raopsr_s *server;
@@ -33,6 +34,13 @@ static void bridge_event(void *owner, raopsr_event_t event, ...) {
 	case RAOP_STOP:
 		goRaopEvent(receiver->owner, event);
 		break;
+	case RAOP_VOLUME: {
+		va_list args;
+		va_start(args, event);
+		goRaopVolume(receiver->owner, va_arg(args, double));
+		va_end(args);
+		break;
+	}
 	default:
 		break;
 	}

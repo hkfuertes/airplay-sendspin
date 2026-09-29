@@ -1,3 +1,34 @@
+diff --git a/pkg/discovery/mdns.go b/pkg/discovery/mdns.go
+index f727071..ec7126d 100644
+--- a/pkg/discovery/mdns.go
++++ b/pkg/discovery/mdns.go
+@@ -23,7 +23,8 @@ var silentLogger = log.New(io.Discard, "", 0)
+ type Config struct {
+ 	ServiceName string
+ 	Port        int
+-	ServerMode  bool // If true, advertise as _sendspin-server._tcp, otherwise _sendspin._tcp
++	ServerMode  bool     // If true, advertise as _sendspin-server._tcp, otherwise _sendspin._tcp
++	IPs         []net.IP // optional explicit advertisement addresses
+ }
+ 
+ type Manager struct {
+@@ -95,9 +96,13 @@ func NewManager(config Config) *Manager {
+ }
+ 
+ func (m *Manager) Advertise() error {
+-	ips, err := getLocalIPs()
+-	if err != nil {
+-		return fmt.Errorf("failed to get local IPs: %w", err)
++	ips := m.config.IPs
++	if len(ips) == 0 {
++		var err error
++		ips, err = getLocalIPs()
++		if err != nil {
++			return fmt.Errorf("failed to get local IPs: %w", err)
++		}
+ 	}
+ 
+ 	serviceType := "_sendspin._tcp"
 diff --git a/pkg/sendspin/client_dialer.go b/pkg/sendspin/client_dialer.go
 index b7048cd..6a1175d 100644
 --- a/pkg/sendspin/client_dialer.go
@@ -22,10 +53,10 @@ index b7048cd..6a1175d 100644
  	}
  	return nil
 diff --git a/pkg/sendspin/role_player.go b/pkg/sendspin/role_player.go
-index b58eb83..86a8c3f 100644
+index b58eb83..84e565d 100644
 --- a/pkg/sendspin/role_player.go
 +++ b/pkg/sendspin/role_player.go
-@@ -13,9 +13,15 @@ import (
+@@ -13,9 +13,19 @@ import (
  
  // PlayerRoleConfig configures the PlayerGroupRole.
  type PlayerRoleConfig struct {
@@ -41,14 +72,21 @@ index b58eb83..86a8c3f 100644
 +	// one-player source select a profile from client/hello before stream/start.
 +	// Nil retains the static fields above.
 +	AudioFormat func() (sampleRate, channels, bitDepth int)
++
++	// ClientAudioFormat overrides AudioFormat for a client with an isolated
++	// source selected at client/hello.
++	ClientAudioFormat func(*ServerClient) (sampleRate, channels, bitDepth int)
  
  	// NewEncoder creates an Opus encoder when needed. When nil, Opus
  	// clients fall back to PCM. Typically set to encode.NewOpusEncoder.
-@@ -41,6 +47,13 @@ func NewPlayerRole(config PlayerRoleConfig) *PlayerGroupRole {
+@@ -41,6 +51,16 @@ func NewPlayerRole(config PlayerRoleConfig) *PlayerGroupRole {
  
  func (r *PlayerGroupRole) Role() string { return "player" }
  
-+func (r *PlayerGroupRole) audioFormat() (sampleRate, channels, bitDepth int) {
++func (r *PlayerGroupRole) audioFormat(c *ServerClient) (sampleRate, channels, bitDepth int) {
++	if r.config.ClientAudioFormat != nil {
++		return r.config.ClientAudioFormat(c)
++	}
 +	if r.config.AudioFormat != nil {
 +		return r.config.AudioFormat()
 +	}
@@ -58,17 +96,17 @@ index b58eb83..86a8c3f 100644
  // OnClientJoin negotiates a codec, creates encoder/resampler if needed,
  // and sends stream/start to clients advertising the player role.
  func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
-@@ -48,7 +61,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -48,7 +68,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
  		return
  	}
  
 -	codec := negotiateCodec(c, r.config.SampleRate)
-+	sampleRate, channels, bitDepth := r.audioFormat()
++	sampleRate, channels, bitDepth := r.audioFormat(c)
 +	codec := negotiateCodec(c, sampleRate, channels, bitDepth, r.config.PreferredCodec)
  
  	var opusEncoder *encode.OpusEncoder
  	var flacEncoder *encode.FLACEncoder
-@@ -56,14 +70,14 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -56,14 +77,14 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
  
  	switch codec {
  	case "opus":
@@ -87,7 +125,7 @@ index b58eb83..86a8c3f 100644
  			if err != nil {
  				log.Printf("Failed to create Opus encoder for %s, falling back to PCM: %v", c.Name(), err)
  				codec = "pcm"
-@@ -77,9 +91,9 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -77,9 +98,9 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
  			resampler = nil
  		}
  	case "flac":
@@ -99,7 +137,7 @@ index b58eb83..86a8c3f 100644
  			if err != nil {
  				log.Printf("Failed to create FLAC encoder for %s, falling back to PCM: %v", c.Name(), err)
  				codec = "pcm"
-@@ -108,8 +122,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -108,8 +129,8 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
  
  	log.Printf("Added client %s with codec %s", c.Name(), codec)
  
@@ -110,7 +148,7 @@ index b58eb83..86a8c3f 100644
  	if codec == "opus" {
  		streamSampleRate = 48000
  		streamBitDepth = 16
-@@ -124,7 +138,7 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
+@@ -124,7 +145,7 @@ func (r *PlayerGroupRole) OnClientJoin(c *ServerClient) {
  		Player: &protocol.StreamStartPlayer{
  			Codec:       codec,
  			SampleRate:  streamSampleRate,
@@ -120,10 +158,10 @@ index b58eb83..86a8c3f 100644
  			CodecHeader: codecHeaderB64,
  		},
 diff --git a/pkg/sendspin/role_player_test.go b/pkg/sendspin/role_player_test.go
-index 57f0c26..25584c0 100644
+index 57f0c26..5409cea 100644
 --- a/pkg/sendspin/role_player_test.go
 +++ b/pkg/sendspin/role_player_test.go
-@@ -40,6 +40,38 @@ func TestPlayerRole_OnClientJoinSendsStreamStart(t *testing.T) {
+@@ -40,6 +40,64 @@ func TestPlayerRole_OnClientJoinSendsStreamStart(t *testing.T) {
  	}
  }
  
@@ -159,14 +197,40 @@ index 57f0c26..25584c0 100644
 +	}
 +}
 +
++func TestPlayerRole_UsesClientAudioFormat(t *testing.T) {
++	role := NewPlayerRole(PlayerRoleConfig{
++		SampleRate: 48000,
++		Channels:   2,
++		BitDepth:   24,
++		ClientAudioFormat: func(*ServerClient) (int, int, int) {
++			return 44100, 2, 16
++		},
++	})
++	sc := &ServerClient{
++		id:    "c1",
++		roles: []string{"player@v1"},
++		capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++			{Codec: "pcm", SampleRate: 44100, Channels: 2, BitDepth: 16},
++		}},
++		sendChan: make(chan interface{}, 1),
++	}
++
++	role.OnClientJoin(sc)
++	message := (<-sc.sendChan).(protocol.Message)
++	start := message.Payload.(protocol.StreamStart)
++	if got := start.Player; got.SampleRate != 44100 || got.Channels != 2 || got.BitDepth != 16 {
++		t.Fatalf("stream format = %+v, want 44100/2/16", got)
++	}
++}
++
  func TestPlayerRole_OnClientJoinSkipsNonPlayerClient(t *testing.T) {
  	role := NewPlayerRole(PlayerRoleConfig{
  		SampleRate: 48000,
 diff --git a/pkg/sendspin/server.go b/pkg/sendspin/server.go
-index 390695e..8016aa3 100644
+index 390695e..b1a3c40 100644
 --- a/pkg/sendspin/server.go
 +++ b/pkg/sendspin/server.go
-@@ -30,6 +30,17 @@ type ServerConfig struct {
+@@ -30,9 +30,32 @@ type ServerConfig struct {
  	// Audio source to stream (required)
  	Source AudioSource
  
@@ -177,6 +241,14 @@ index 390695e..8016aa3 100644
 +	// An unsupported preference falls back to a compatible advertised format.
 +	PreferredCodec string
 +
++	// OnClientHello runs after client/hello validation and before player-role
++	// setup. It can claim a client by its stable client_id.
++	OnClientHello func(protocol.ClientHello) error
++
++	// SourceForClient selects an isolated source for a client-initiated
++	// connection. Nil keeps Source for every client.
++	SourceForClient func(protocol.ClientHello) (AudioSource, error)
++
 +	// OnPlayerHello runs after client/hello validation and before player-role
 +	// setup. A per-player source can select its output format from capabilities.
 +	OnPlayerHello func(*protocol.PlayerV1Support) error
@@ -184,7 +256,14 @@ index 390695e..8016aa3 100644
  	// EnableMDNS enables mDNS service advertisement (default: true)
  	EnableMDNS bool
  
-@@ -40,6 +51,10 @@ type ServerConfig struct {
++	// MDNSIPs limits server advertisement to explicit LAN addresses.
++	// Nil retains discovery's all-interface behavior.
++	MDNSIPs []net.IP
++
+ 	Debug bool
+ 
+ 	// DiscoverClients enables server-initiated discovery: browse for
+@@ -40,6 +63,10 @@ type ServerConfig struct {
  	// See https://www.sendspin-audio.com/spec/ — "server-initiated" mode.
  	DiscoverClients bool
  
@@ -195,7 +274,7 @@ index 390695e..8016aa3 100644
  	// SupportedRoles lists the role families this server activates.
  	// When nil, defaults to ["player", "metadata"] for backward compat.
  	// Roles registered via Group.RegisterRole are also activated
-@@ -100,6 +115,15 @@ func NewServer(config ServerConfig) (*Server, error) {
+@@ -100,6 +127,15 @@ func NewServer(config ServerConfig) (*Server, error) {
  	if config.Source == nil {
  		return nil, fmt.Errorf("audio source is required")
  	}
@@ -211,29 +290,30 @@ index 390695e..8016aa3 100644
  	if config.SupportedRoles == nil {
  		config.SupportedRoles = []string{"player", "metadata"}
  	}
-@@ -133,9 +157,11 @@ func NewServer(config ServerConfig) (*Server, error) {
+@@ -133,9 +169,12 @@ func NewServer(config ServerConfig) (*Server, error) {
  	}))
  
  	s.defaultGroup.RegisterRole(NewPlayerRole(PlayerRoleConfig{
 -		SampleRate: s.audioSource.SampleRate(),
 -		Channels:   s.audioSource.Channels(),
 -		BitDepth:   DefaultBitDepth,
-+		SampleRate:     s.audioSource.SampleRate(),
-+		Channels:       s.audioSource.Channels(),
-+		BitDepth:       s.audioBitDepth(),
-+		PreferredCodec: config.PreferredCodec,
-+		AudioFormat:    s.audioFormat,
++		SampleRate:        s.audioSource.SampleRate(),
++		Channels:          s.audioSource.Channels(),
++		BitDepth:          s.audioBitDepth(),
++		PreferredCodec:    config.PreferredCodec,
++		AudioFormat:       s.audioFormat,
++		ClientAudioFormat: s.clientAudioFormat,
  		NewEncoder: func(sampleRate, channels, chunkSamples int) (*encode.OpusEncoder, error) {
  			return encode.NewOpusEncoder(sampleRate, channels, chunkSamples)
  		},
-@@ -147,11 +173,42 @@ func NewServer(config ServerConfig) (*Server, error) {
+@@ -147,11 +186,52 @@ func NewServer(config ServerConfig) (*Server, error) {
  	return s, nil
  }
  
 +// audioBitDepth reads an optional dynamic source format. Static sources keep
 +// ServerConfig.BitDepth for backward compatibility.
-+func (s *Server) audioBitDepth() int {
-+	if source, ok := s.audioSource.(interface{ BitDepth() int }); ok {
++func (s *Server) sourceBitDepth(audioSource AudioSource) int {
++	if source, ok := audioSource.(interface{ BitDepth() int }); ok {
 +		if bitDepth := source.BitDepth(); bitDepth == 16 || bitDepth == DefaultBitDepth {
 +			return bitDepth
 +		}
@@ -241,8 +321,18 @@ index 390695e..8016aa3 100644
 +	return s.config.BitDepth
 +}
 +
++func (s *Server) audioBitDepth() int { return s.sourceBitDepth(s.audioSource) }
++
 +func (s *Server) audioFormat() (sampleRate, channels, bitDepth int) {
 +	return s.audioSource.SampleRate(), s.audioSource.Channels(), s.audioBitDepth()
++}
++
++func (s *Server) clientAudioFormat(c *ServerClient) (sampleRate, channels, bitDepth int) {
++	source := s.audioSource
++	if c != nil && c.source != nil {
++		source = c.source
++	}
++	return source.SampleRate(), source.Channels(), s.sourceBitDepth(source)
 +}
 +
 +// SetVolume changes a connected player's volume (0-100).
@@ -270,7 +360,15 @@ index 390695e..8016aa3 100644
  		s.audioSource.Channels())
  
  	if s.config.EnableMDNS {
-@@ -210,6 +267,8 @@ func (s *Server) Start() error {
+@@ -159,6 +239,7 @@ func (s *Server) Start() error {
+ 			ServiceName: s.config.Name,
+ 			Port:        s.config.Port,
+ 			ServerMode:  true,
++			IPs:         s.config.MDNSIPs,
+ 		})
+ 
+ 		if err := s.mdnsManager.Advertise(); err != nil {
+@@ -210,6 +291,8 @@ func (s *Server) Start() error {
  
  	listener, err := net.Listen("tcp", addr)
  	if err != nil {
@@ -279,7 +377,7 @@ index 390695e..8016aa3 100644
  		return fmt.Errorf("listen on %s: %w", addr, err)
  	}
  	tcpAddr, _ := listener.Addr().(*net.TCPAddr)
-@@ -232,42 +291,103 @@ func (s *Server) Start() error {
+@@ -232,42 +315,103 @@ func (s *Server) Start() error {
  		log.Printf("Server shutting down...")
  	case err := <-errChan:
  		log.Printf("HTTP server error: %v", err)
@@ -395,13 +493,36 @@ index 390695e..8016aa3 100644
  }
  
  func (s *Server) Stop() {
-@@ -384,6 +504,16 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
+@@ -384,6 +528,39 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
  	}
  
  	log.Printf("Client hello: %s (ID: %s, Roles: %v)", hello.Name, hello.ClientID, hello.SupportedRoles)
-+	if s.config.Debug {
-+		log.Printf("[DEBUG-a4f2] hello: %s", data)
-+		log.Printf("[DEBUG-a4f2] capabilities: %+v", hello.PlayerV1Support)
++	// Reject a duplicate before callbacks can reset or allocate a per-client
++	// source. The later locked check still closes the small race window.
++	s.clientsMu.RLock()
++	_, duplicate := s.clients[hello.ClientID]
++	s.clientsMu.RUnlock()
++	if duplicate {
++		log.Printf("Client ID %s already connected, rejecting duplicate", hello.ClientID)
++		return
++	}
++	if s.config.OnClientHello != nil {
++		if err := s.config.OnClientHello(hello); err != nil {
++			log.Printf("Rejecting client %s: %v", hello.Name, err)
++			return
++		}
++	}
++	source := s.audioSource
++	if s.config.SourceForClient != nil {
++		source, err = s.config.SourceForClient(hello)
++		if err != nil {
++			log.Printf("Rejecting client %s: %v", hello.Name, err)
++			return
++		}
++		if source == nil {
++			log.Printf("Rejecting client %s: source selector returned nil", hello.Name)
++			return
++		}
 +	}
 +	if s.config.OnPlayerHello != nil {
 +		if err := s.config.OnPlayerHello(hello.PlayerV1Support); err != nil {
@@ -412,19 +533,28 @@ index 390695e..8016aa3 100644
  
  	c := &ServerClient{
  		id:           hello.ClientID,
-@@ -391,6 +521,7 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
+@@ -391,6 +568,8 @@ func (s *Server) handleConnection(conn *websocket.Conn) (retry bool) {
  		conn:         conn,
  		roles:        hello.SupportedRoles,
  		capabilities: hello.PlayerV1Support,
++		source:       source,
 +		helloAt:      s.getClockMicros(),
  		state:        "synchronized",
  		volume:       100,
  		muted:        false,
 diff --git a/pkg/sendspin/server_client.go b/pkg/sendspin/server_client.go
-index d3f93a6..c3e7692 100644
+index d3f93a6..baf33a5 100644
 --- a/pkg/sendspin/server_client.go
 +++ b/pkg/sendspin/server_client.go
-@@ -41,6 +41,8 @@ type ServerClient struct {
+@@ -29,6 +29,7 @@ type ServerClient struct {
+ 	conn         *websocket.Conn
+ 	roles        []string
+ 	capabilities *protocol.PlayerV1Support
++	source       AudioSource // optional per-client source selected at hello
+ 
+ 	state  string
+ 	volume int
+@@ -41,6 +42,8 @@ type ServerClient struct {
  	flacEncoder   *encode.FLACEncoder
  	resampler     *audio.Resampler // non-nil only when source rate != 48kHz
  	bufferTracker *BufferTracker
@@ -434,7 +564,7 @@ index d3f93a6..c3e7692 100644
  	sendChan chan interface{}
  	done     chan struct{}
 diff --git a/pkg/sendspin/server_dispatch.go b/pkg/sendspin/server_dispatch.go
-index 3f10cbb..e48bc64 100644
+index 3f10cbb..9bc203e 100644
 --- a/pkg/sendspin/server_dispatch.go
 +++ b/pkg/sendspin/server_dispatch.go
 @@ -39,6 +39,11 @@ func (s *Server) handleClientMessage(c *ServerClient, data []byte) {
@@ -449,18 +579,8 @@ index 3f10cbb..e48bc64 100644
  
  	timeData, err := json.Marshal(payload)
  	if err != nil {
-@@ -57,6 +62,9 @@ func (s *Server) handleTimeSync(c *ServerClient, payload interface{}) {
- 		ServerReceived:    serverRecv,
- 		ServerTransmitted: serverSend,
- 	}
-+	if s.config.Debug {
-+		log.Printf("[DEBUG-a4f2] time sync %s: client=%d recv=%d send=%d", c.name, clientTime.ClientTransmitted, serverRecv, serverSend)
-+	}
- 
- 	if err := c.Send("server/time", response); err != nil {
- 		if s.config.Debug {
 diff --git a/pkg/sendspin/server_stream.go b/pkg/sendspin/server_stream.go
-index fc7927b..c65011e 100644
+index fc7927b..ab1e2c6 100644
 --- a/pkg/sendspin/server_stream.go
 +++ b/pkg/sendspin/server_stream.go
 @@ -10,16 +10,60 @@ import (
@@ -525,7 +645,7 @@ index fc7927b..c65011e 100644
  		case <-s.stopChan:
  			log.Printf("Audio streaming stopping")
  			return
-@@ -27,19 +71,14 @@ func (s *Server) streamAudio() {
+@@ -27,32 +71,29 @@ func (s *Server) streamAudio() {
  	}
  }
  
@@ -540,54 +660,214 @@ index fc7927b..c65011e 100644
 -	// Weakening either invariant re-introduces the drift class described in
 -	// aiosendspin#217 (500ms cliff after ~17 minutes at 44.1k/25ms). See also
 -	// issue #91 for converting the linear resampler to integer-rational math.
+-	currentTime := s.getClockMicros()
+-	playbackTime := currentTime + (BufferAheadMs * 1000)
 +func (s *Server) generateAndSendChunk(playbackTime int64) {
++	if s.config.SourceForClient != nil {
++		s.generateAndSendClientChunks(playbackTime)
++		return
++	}
+ 
 +	// ChunkDurationMs × sampleRate must divide evenly by 1000 at every
 +	// supported rate, or chunkUs is not exactly one chunk and the timeline
 +	// drifts (aiosendspin#217). At 20ms: 44.1k→882, 48k→960, 88.2k→1764,
 +	// 96k→1920. At 25ms, 44.1k→1102.5 — do NOT change the constant without
 +	// also re-working the chunk-size/sample math.
- 	currentTime := s.getClockMicros()
--	playbackTime := currentTime + (BufferAheadMs * 1000)
++	currentTime := s.getClockMicros()
 +	bitDepth := s.audioBitDepth()
- 
  	chunkSamples := (s.audioSource.SampleRate() * ChunkDurationMs) / 1000
- 	totalSamples := chunkSamples * s.audioSource.Channels()
-@@ -74,8 +113,13 @@ func (s *Server) generateAndSendChunk() {
- 		flacEncoder := c.flacEncoder
- 		resampler := c.resampler
- 		tracker := c.bufferTracker
-+		ready := audioReady(c.helloAt, c.initialSyncAt, currentTime)
- 		c.mu.RUnlock()
+-	totalSamples := chunkSamples * s.audioSource.Channels()
+-
+-	samples := make([]int32, totalSamples)
++	samples := make([]int32, chunkSamples*s.audioSource.Channels())
+ 	n, err := s.audioSource.Read(samples)
+ 	if err != nil {
+ 		s.consecutiveReadErrs++
+-		// Log every error for the first few, then throttle
++		// Log every error for the first few, then throttle.
+ 		if s.consecutiveReadErrs <= 3 || s.consecutiveReadErrs%50 == 0 {
+ 			log.Printf("Error reading audio source (%d consecutive): %v", s.consecutiveReadErrs, err)
+ 		}
+-		// After 1 second of failures (50 ticks at 20ms), notify clients
++		// After 1 second of failures (50 ticks at 20ms), notify clients.
+ 		if s.consecutiveReadErrs == 50 {
+ 			log.Printf("Audio source failed for 1s, sending stream/end to all clients")
+ 			s.notifyStreamEnd()
+@@ -63,83 +104,108 @@ func (s *Server) generateAndSendChunk() {
  
-+		if !ready {
+ 	s.clientsMu.RLock()
+ 	defer s.clientsMu.RUnlock()
++	for _, c := range s.clients {
++		s.sendChunk(c, samples, n, bitDepth, playbackTime, currentTime)
++	}
++}
+ 
++// generateAndSendClientChunks is the target-isolated path used by an inbound
++// bridge. SourceForClient promises one live source per client, so each source
++// is consumed exactly once per timeline tick.
++func (s *Server) generateAndSendClientChunks(playbackTime int64) {
++	currentTime := s.getClockMicros()
++	s.clientsMu.RLock()
++	clients := make([]*ServerClient, 0, len(s.clients))
+ 	for _, c := range s.clients {
+-		var audioData []byte
+-		var encodeErr error
++		clients = append(clients, c)
++	}
++	s.clientsMu.RUnlock()
+ 
++	for _, c := range clients {
+ 		c.mu.RLock()
+-		codec := c.codec
+-		opusEncoder := c.opusEncoder
+-		flacEncoder := c.flacEncoder
+-		resampler := c.resampler
+-		tracker := c.bufferTracker
++		source := c.source
+ 		c.mu.RUnlock()
++		if source == nil {
++			source = s.audioSource
++		}
++		chunkSamples := (source.SampleRate() * ChunkDurationMs) / 1000
++		samples := make([]int32, chunkSamples*source.Channels())
++		n, err := source.Read(samples)
++		if err != nil {
++			log.Printf("Error reading audio source for %s: %v", c.name, err)
 +			continue
 +		}
-+
- 		switch codec {
- 		case "opus":
- 			if opusEncoder != nil {
-@@ -89,7 +133,7 @@ func (s *Server) generateAndSendChunk() {
- 					samplesToEncode = resampled[:samplesWritten]
- 				}
++		s.sendChunk(c, samples, n, s.sourceBitDepth(source), playbackTime, currentTime)
++	}
++}
  
+-		switch codec {
+-		case "opus":
+-			if opusEncoder != nil {
+-				samplesToEncode := samples[:n]
+-
+-				// Resample when source rate != 48kHz (Opus is locked to 48kHz)
+-				if resampler != nil {
+-					outputSamples := resampler.OutputSamplesNeeded(len(samplesToEncode))
+-					resampled := make([]int32, outputSamples)
+-					samplesWritten := resampler.Resample(samplesToEncode, resampled)
+-					samplesToEncode = resampled[:samplesWritten]
+-				}
+-
 -				samples16 := convertToInt16(samplesToEncode)
-+				samples16 := convertToInt16(samplesToEncode, bitDepth)
- 				audioData, encodeErr = opusEncoder.Encode(samples16)
- 				if encodeErr != nil {
- 					log.Printf("Opus encode error for %s: %v", c.name, encodeErr)
-@@ -109,9 +153,9 @@ func (s *Server) generateAndSendChunk() {
- 				continue
- 			}
- 		case "pcm":
+-				audioData, encodeErr = opusEncoder.Encode(samples16)
+-				if encodeErr != nil {
+-					log.Printf("Opus encode error for %s: %v", c.name, encodeErr)
+-					continue
+-				}
+-			} else {
+-				continue
+-			}
+-		case "flac":
+-			if flacEncoder != nil {
+-				audioData, encodeErr = flacEncoder.Encode(samples[:n])
+-				if encodeErr != nil {
+-					log.Printf("FLAC encode error for %s: %v", c.name, encodeErr)
+-					continue
+-				}
+-			} else {
+-				continue
+-			}
+-		case "pcm":
 -			audioData = encodePCM(samples[:n])
-+			audioData = encodePCM(samples[:n], bitDepth)
- 		default:
+-		default:
 -			audioData = encodePCM(samples[:n])
-+			audioData = encodePCM(samples[:n], bitDepth)
+-		}
+-
+-		chunk := CreateAudioChunk(playbackTime, audioData)
+-
+-		if tracker != nil {
+-			chunkDurationUs := int64(ChunkDurationMs) * 1000
+-			tracker.PruneConsumed(currentTime)
+-			if !tracker.CanSend(len(chunk), chunkDurationUs) {
+-				if s.config.Debug {
+-					log.Printf("Buffer full for %s, skipping chunk (%d bytes buffered)",
+-						c.name, tracker.BufferedBytes())
+-				}
+-				continue
+-			}
++func (s *Server) sendChunk(c *ServerClient, samples []int32, n, bitDepth int, playbackTime, currentTime int64) {
++	var audioData []byte
++	var encodeErr error
++
++	c.mu.RLock()
++	codec := c.codec
++	opusEncoder := c.opusEncoder
++	flacEncoder := c.flacEncoder
++	resampler := c.resampler
++	tracker := c.bufferTracker
++	ready := audioReady(c.helloAt, c.initialSyncAt, currentTime)
++	c.mu.RUnlock()
++
++	if !ready {
++		return
++	}
++
++	switch codec {
++	case "opus":
++		if opusEncoder == nil {
++			return
  		}
++		samplesToEncode := samples[:n]
++		// Resample when source rate != 48kHz (Opus is locked to 48kHz).
++		if resampler != nil {
++			outputSamples := resampler.OutputSamplesNeeded(len(samplesToEncode))
++			resampled := make([]int32, outputSamples)
++			samplesWritten := resampler.Resample(samplesToEncode, resampled)
++			samplesToEncode = resampled[:samplesWritten]
++		}
++		samples16 := convertToInt16(samplesToEncode, bitDepth)
++		audioData, encodeErr = opusEncoder.Encode(samples16)
++		if encodeErr != nil {
++			log.Printf("Opus encode error for %s: %v", c.name, encodeErr)
++			return
++		}
++	case "flac":
++		if flacEncoder == nil {
++			return
++		}
++		audioData, encodeErr = flacEncoder.Encode(samples[:n])
++		if encodeErr != nil {
++			log.Printf("FLAC encode error for %s: %v", c.name, encodeErr)
++			return
++		}
++	default:
++		audioData = encodePCM(samples[:n], bitDepth)
++	}
  
- 		chunk := CreateAudioChunk(playbackTime, audioData)
-@@ -160,32 +204,40 @@ func (s *Server) notifyStreamEnd() {
+-		if err := c.SendBinary(chunk); err != nil {
++	chunk := CreateAudioChunk(playbackTime, audioData)
++	if tracker != nil {
++		tracker.PruneConsumed(currentTime)
++		if !tracker.CanSend(len(chunk), chunkUs) {
+ 			if s.config.Debug {
+-				log.Printf("Error sending audio to %s: %v", c.name, err)
++				log.Printf("Buffer full for %s, skipping chunk (%d bytes buffered)", c.name, tracker.BufferedBytes())
+ 			}
+-			continue
++			return
+ 		}
+-
+-		if tracker != nil {
+-			chunkDurationUs := int64(ChunkDurationMs) * 1000
+-			chunkEndTimeUs := playbackTime + chunkDurationUs
+-			tracker.Register(chunkEndTimeUs, len(chunk), chunkDurationUs)
++	}
++	if err := c.SendBinary(chunk); err != nil {
++		if s.config.Debug {
++			log.Printf("Error sending audio to %s: %v", c.name, err)
+ 		}
++		return
++	}
++	if tracker != nil {
++		tracker.Register(playbackTime+chunkUs, len(chunk), chunkUs)
+ 	}
+ }
+ 
+@@ -160,32 +226,40 @@ func (s *Server) notifyStreamEnd() {
  	}
  }
  
@@ -644,7 +924,7 @@ index fc7927b..c65011e 100644
  func strPtr(s string) *string {
  	return &s
  }
-@@ -210,17 +262,29 @@ func CreateArtworkChunk(channel int, timestamp int64, imageData []byte) []byte {
+@@ -210,17 +284,29 @@ func CreateArtworkChunk(channel int, timestamp int64, imageData []byte) []byte {
  	return chunk
  }
  
@@ -681,13 +961,15 @@ index fc7927b..c65011e 100644
  	for i, sample := range samples {
  		output[i*3] = byte(sample)
 diff --git a/pkg/sendspin/server_test.go b/pkg/sendspin/server_test.go
-index 8b7438d..f031cd9 100644
+index 8b7438d..a59b05b 100644
 --- a/pkg/sendspin/server_test.go
 +++ b/pkg/sendspin/server_test.go
-@@ -138,12 +138,17 @@ func TestServerStartStop(t *testing.T) {
+@@ -138,12 +138,27 @@ func TestServerStartStop(t *testing.T) {
  
  func TestServerClientConnection(t *testing.T) {
  	source := NewTestTone(48000, 2)
++	clientHelloSeen := make(chan protocol.ClientHello, 1)
++	sourceSeen := make(chan protocol.ClientHello, 1)
 +	helloSeen := make(chan *protocol.PlayerV1Support, 1)
  
  	server, err := NewServer(ServerConfig{
@@ -695,6 +977,14 @@ index 8b7438d..f031cd9 100644
  		Name:   "Test Server",
  		Source: source,
  		Debug:  true,
++		OnClientHello: func(hello protocol.ClientHello) error {
++			clientHelloSeen <- hello
++			return nil
++		},
++		SourceForClient: func(hello protocol.ClientHello) (AudioSource, error) {
++			sourceSeen <- hello
++			return source, nil
++		},
 +		OnPlayerHello: func(support *protocol.PlayerV1Support) error {
 +			helloSeen <- support
 +			return nil
@@ -702,10 +992,26 @@ index 8b7438d..f031cd9 100644
  	})
  	if err != nil {
  		t.Fatalf("failed to create server: %v", err)
-@@ -193,6 +198,14 @@ func TestServerClientConnection(t *testing.T) {
+@@ -193,6 +208,30 @@ func TestServerClientConnection(t *testing.T) {
  	if err := conn.WriteJSON(hello); err != nil {
  		t.Fatalf("failed to send hello: %v", err)
  	}
++	select {
++	case clientHello := <-clientHelloSeen:
++		if clientHello.ClientID != "test-client-1" {
++			t.Fatalf("OnClientHello got %+v", clientHello)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("OnClientHello was not called")
++	}
++	select {
++	case sourceHello := <-sourceSeen:
++		if sourceHello.ClientID != "test-client-1" {
++			t.Fatalf("SourceForClient got %+v", sourceHello)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("SourceForClient was not called")
++	}
 +	select {
 +	case support := <-helloSeen:
 +		if support == nil || len(support.SupportedFormats) != 1 || support.SupportedFormats[0].SampleRate != 48000 {
@@ -717,3 +1023,126 @@ index 8b7438d..f031cd9 100644
  
  	// Read server/hello response
  	var msg protocol.Message
+diff --git a/pkg/sendspin/server_stream_test.go b/pkg/sendspin/server_stream_test.go
+new file mode 100644
+index 0000000..8450a27
+--- /dev/null
++++ b/pkg/sendspin/server_stream_test.go
+@@ -0,0 +1,117 @@
++package sendspin
++
++import (
++	"bytes"
++	"encoding/binary"
++	"testing"
++
++	"github.com/Sendspin/sendspin-go/pkg/protocol"
++)
++
++type chunkSource struct {
++	value int32
++	reads int
++}
++
++func (s *chunkSource) Read(samples []int32) (int, error) {
++	for i := range samples {
++		samples[i] = s.value
++	}
++	s.reads++
++	return len(samples), nil
++}
++func (*chunkSource) SampleRate() int                    { return 48000 }
++func (*chunkSource) Channels() int                      { return 2 }
++func (*chunkSource) Metadata() (string, string, string) { return "", "", "" }
++func (*chunkSource) Close() error                       { return nil }
++
++func TestGenerateAndSendClientChunksUsesIsolatedSources(t *testing.T) {
++	left, right := &chunkSource{value: 123}, &chunkSource{value: -456}
++	server := &Server{
++		config:      ServerConfig{BitDepth: 16, SourceForClient: func(protocol.ClientHello) (AudioSource, error) { return nil, nil }},
++		audioSource: &chunkSource{},
++		clients: map[string]*ServerClient{
++			"left":  {name: "left", source: left, codec: "pcm", helloAt: -noSyncFallbackUs, sendChan: make(chan interface{}, 1)},
++			"right": {name: "right", source: right, codec: "pcm", helloAt: -noSyncFallbackUs, sendChan: make(chan interface{}, 1)},
++		},
++	}
++
++	server.generateAndSendChunk(42)
++	if left.reads != 1 || right.reads != 1 {
++		t.Fatalf("reads = left %d, right %d; want one each", left.reads, right.reads)
++	}
++	for _, tc := range []struct {
++		client *ServerClient
++		want   int16
++	}{
++		{server.clients["left"], 123},
++		{server.clients["right"], -456},
++	} {
++		frame, ok := (<-tc.client.sendChan).([]byte)
++		if !ok || len(frame) < 11 {
++			t.Fatalf("frame = %#v", frame)
++		}
++		if got := int16(binary.LittleEndian.Uint16(frame[9:11])); got != tc.want {
++			t.Fatalf("PCM sample = %d, want %d", got, tc.want)
++		}
++	}
++}
++
++func TestEncodePCM16(t *testing.T) {
++	got := encodePCM([]int32{0, 1, -1, 32767, -32768}, 16)
++	want := []byte{0, 0, 1, 0, 255, 255, 255, 127, 0, 128}
++	if !bytes.Equal(got, want) {
++		t.Fatalf("encodePCM(16) = %v, want %v", got, want)
++	}
++}
++
++func TestNegotiateCodecPrefersCompatiblePCM(t *testing.T) {
++	c := &ServerClient{capabilities: &protocol.PlayerV1Support{SupportedFormats: []protocol.AudioFormat{
++		{Codec: "flac", SampleRate: 48000, Channels: 2, BitDepth: 16},
++		{Codec: "pcm", SampleRate: 48000, Channels: 2, BitDepth: 16},
++	}}}
++	if got := negotiateCodec(c, 48000, 2, 16, "pcm"); got != "pcm" {
++		t.Fatalf("codec = %q, want pcm", got)
++	}
++}
++
++func TestAudioReady(t *testing.T) {
++	for _, tc := range []struct {
++		helloAt, syncAt, now int64
++		want                 bool
++	}{
++		{5, 0, 5 + noSyncFallbackUs - 1, false},      // no sync yet: hold
++		{5, 0, 5 + noSyncFallbackUs, true},           // never syncs: fallback
++		{5, 10, 10 + initialSyncSettleUs - 1, false}, // settling
++		{5, 10, 10 + initialSyncSettleUs, true},
++	} {
++		if got := audioReady(tc.helloAt, tc.syncAt, tc.now); got != tc.want {
++			t.Fatalf("audioReady(%d, %d, %d) = %v, want %v", tc.helloAt, tc.syncAt, tc.now, got, tc.want)
++		}
++	}
++}
++
++func TestTimelineIsSampleContinuous(t *testing.T) {
++	var next, now int64 = 0, 1_000_000
++	var sent []int64
++	for _, gap := range []int64{0, 19_500, 20_800, 45_000, 19_700} { // jitter plus one late tick
++		now += gap
++		start, n := timeline(next, now)
++		for i := range int64(n) {
++			sent = append(sent, start+i*chunkUs)
++		}
++		next = start + int64(n)*chunkUs
++	}
++	if sent[0] != 1_000_000+aheadUs || len(sent) != 6 {
++		t.Fatalf("sent %v, want 6 chunks from %d", sent, 1_000_000+aheadUs)
++	}
++	for i := 1; i < len(sent); i++ {
++		if sent[i]-sent[i-1] != chunkUs {
++			t.Fatalf("chunk %d at %d, want %d", i, sent[i], sent[i-1]+chunkUs)
++		}
++	}
++	now += 2 * aheadUs // stall past the whole buffer: new timeline
++	if start, n := timeline(next, now); start != now+aheadUs || n != 1 {
++		t.Fatalf("after stall got (%d, %d), want (%d, 1)", start, n, now+aheadUs)
++	}
++}
