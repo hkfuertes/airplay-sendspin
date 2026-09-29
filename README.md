@@ -50,4 +50,5 @@ libraop before building the bridge binary; no vendor source is checked in.
   (`port` is filled in if missing). It plays in sync on every member `speaker
   id`, at 48 kHz/16-bit. Members stay advertised on their own; if a speaker's
   own target and one of its groups play at once, the speaker mixes both. Group
-  volume sets every member to that volume.
+  volume moves the members' average and keeps their differences (as in
+  aiosendspin); at 0 or 100 every member ends up equal.

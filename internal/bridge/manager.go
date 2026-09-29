@@ -37,6 +37,7 @@ type Config struct {
 
 type volumeController interface {
 	SetVolume(clientID string, volume int) error
+	Clients() []sendspin.ClientInfo
 }
 
 type Manager struct {
@@ -212,7 +213,8 @@ func (m *Manager) startGroups() error {
 	return nil
 }
 
-// groupVolume sets every member speaker to the group's AirPlay volume.
+// groupVolume moves the members' average volume to the group's AirPlay volume
+// and keeps their differences, as aiosendspin's group volume does.
 func (m *Manager) groupVolume(members []groupMember, volume float64) {
 	m.mu.Lock()
 	targets := make([]*target, 0, len(members))
@@ -222,8 +224,60 @@ func (m *Manager) groupVolume(members []groupMember, volume float64) {
 		}
 	}
 	m.mu.Unlock()
+	var players []*target
+	var levels []float64
 	for _, t := range targets {
-		t.onVolume(volume)
+		if level, ok := t.playerVolume(); ok {
+			players = append(players, t)
+			levels = append(levels, float64(level))
+		}
+	}
+	spreadVolume(levels, float64(airPlayVolumePercent(volume)))
+	for i, t := range players {
+		t.setPlayerVolume(int(math.Round(levels[i])))
+	}
+}
+
+// spreadVolume shifts every level by the same amount so their mean becomes
+// target. What a level loses to the 0..100 clamp is shared among the levels
+// that still have room.
+func spreadVolume(levels []float64, target float64) {
+	if len(levels) == 0 {
+		return
+	}
+	var sum float64
+	for _, level := range levels {
+		sum += level
+	}
+	delta := target - sum/float64(len(levels))
+	active := make([]int, len(levels))
+	for i := range active {
+		active[i] = i
+	}
+	// A pass that clamps nobody has applied all of delta; any other pass drops
+	// a level, so this ends within one pass per level.
+	for {
+		var lost float64
+		next := active[:0]
+		for _, i := range active {
+			level := levels[i] + delta
+			switch {
+			case level > 100:
+				lost += level - 100
+				level = 100
+			case level < 0:
+				lost += level
+				level = 0
+			default:
+				next = append(next, i)
+			}
+			levels[i] = level
+		}
+		if len(next) == len(active) || len(next) == 0 {
+			return
+		}
+		delta = lost / float64(len(next))
+		active = next
 	}
 }
 
@@ -591,13 +645,32 @@ func (t *target) setClientID(clientID string) {
 	t.sessionMu.Unlock()
 }
 
-func (t *target) onVolume(volume float64) {
+func (t *target) session() (volumeController, string) {
 	t.sessionMu.RLock()
-	control, clientID := t.volumeControl, t.clientID
-	t.sessionMu.RUnlock()
-	if control != nil && clientID != "" {
-		_ = control.SetVolume(clientID, airPlayVolumePercent(volume))
+	defer t.sessionMu.RUnlock()
+	return t.volumeControl, t.clientID
+}
+
+func (t *target) onVolume(volume float64) { t.setPlayerVolume(airPlayVolumePercent(volume)) }
+
+func (t *target) setPlayerVolume(volume int) {
+	if control, clientID := t.session(); control != nil && clientID != "" {
+		_ = control.SetVolume(clientID, volume)
 	}
+}
+
+// playerVolume returns the volume the connected player last reported.
+func (t *target) playerVolume() (int, bool) {
+	control, clientID := t.session()
+	if control == nil || clientID == "" {
+		return 0, false
+	}
+	for _, c := range control.Clients() {
+		if c.ID == clientID {
+			return c.Volume, true
+		}
+	}
+	return 0, false
 }
 
 func airPlayVolumePercent(volume float64) int {
