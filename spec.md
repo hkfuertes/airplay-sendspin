@@ -86,8 +86,8 @@ Modelo de Aircast (hassio-addons): `repository.yaml` en la raíz y
 `host_network` y `addon_config` montado en `/config` (ahí vive `config.xml`,
 editable con File editor/Samba). La imagen es la etapa `addon` del Dockerfile
 (misma que `runtime`, con `-config /config/config.xml`). El workflow
-`.github/workflows/addon.yaml` la publica para amd64 al cambiar `version`.
-Sin
+`.github/workflows/addon.yaml` la publica para amd64 y aarch64 con runners
+nativos, uno cada vez, al cambiar `version`. Sin
 opciones en la UI: todo se configura en `config.xml`. Requisito: repo y
 paquetes GHCR públicos (o registro con credenciales en Supervisor).
 

@@ -15,7 +15,7 @@ docker compose up -d --build
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
 then install **AirPlay Sendspin**. Home Assistant pulls a prebuilt image
-(amd64) published by `.github/workflows/addon.yaml` when
+(amd64/aarch64) published by `.github/workflows/addon.yaml` when
 `airplay-sendspin/config.yaml`'s `version` changes; `config.xml` lives in the
 add-on's config folder. The repository and its GHCR packages must be public (or
 the registry added to Supervisor) for Home Assistant to fetch them.

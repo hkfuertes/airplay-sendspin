@@ -67,6 +67,7 @@ CMD ["/usr/local/bin/airplay-sendspin", "-config", "/data/config.xml"]
 
 # Home Assistant add-on: config.xml lives in the user-editable addon_config.
 FROM runtime AS addon
+ARG BUILD_ARCH
 ARG BUILD_VERSION
-LABEL io.hass.type="addon" io.hass.arch="amd64" io.hass.version="${BUILD_VERSION}"
+LABEL io.hass.type="addon" io.hass.arch="${BUILD_ARCH}" io.hass.version="${BUILD_VERSION}"
 CMD ["/usr/local/bin/airplay-sendspin", "-config", "/config/config.xml"]
