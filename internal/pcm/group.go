@@ -3,6 +3,8 @@ package pcm
 import (
 	"math"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // GroupFormat is what every group member receives: one chunk is shared by all
@@ -13,8 +15,11 @@ var GroupFormat = Format{SampleRate: SendspinSampleRate, BitDepth: 16}
 
 const (
 	chunkUs     = 20_000 // Sendspin's fixed chunk; playback times sit on its grid
-	groupChunks = 16     // member timelines run within a chunk or two of each other
+	groupChunks = 32     // MaxDelay plus the chunk or two member timelines drift apart
 )
+
+// MaxDelay is the most a speaker's group audio can be held back (delay_ms).
+const MaxDelay = 500 * time.Millisecond
 
 // Group is a multiroom AirPlay target. Each 20 ms chunk is read once and kept
 // by playback time, so every member gets the same audio for the same instant,
@@ -40,33 +45,49 @@ func NewGroup() (*Group, error) {
 	return &Group{Pipeline: p}, nil
 }
 
-// mixAt adds the chunk for playbackTime to dst. The first member to ask reads
-// it from the queue; a chunk already gone from the cache is left out.
-func (g *Group) mixAt(dst []int32, playbackTime int64) {
-	i := playbackTime / chunkUs
+// mixAt adds the group audio for the chunk at playbackTime, held back by delay
+// samples, to dst. A delayed window can straddle two cached chunks.
+func (g *Group) mixAt(dst []int32, playbackTime int64, delay int) {
+	n := int64(len(dst))
+	start := playbackTime/chunkUs*n - int64(delay) // group sample index of dst[0]
+	if n == 0 || start < 0 {
+		return
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if i-g.next >= groupChunks { // first read, or every member started a new timeline
+	for k := start / n; k*n < start+n; k++ {
+		chunk := g.chunkAt(k, len(dst))
+		if chunk == nil {
+			continue
+		}
+		lo, hi := max(k*n, start), min((k+1)*n, start+n)
+		out, in := dst[lo-start:hi-start], chunk[lo-k*n:hi-k*n]
+		for j := range out {
+			out[j] = min(max(out[j]+in[j], math.MinInt16), math.MaxInt16)
+		}
+	}
+}
+
+// chunkAt returns chunk i, which the first member to ask reads from the queue,
+// or nil once it has left the cache. Wants mu.
+func (g *Group) chunkAt(i int64, size int) []int32 {
+	if g.next == 0 || i-g.next >= groupChunks { // first read, or every member started a new timeline
 		g.next = i
 	}
 	for ; g.next <= i; g.next++ {
 		slot := g.next % groupChunks
-		if len(g.chunks[slot]) != len(dst) {
-			g.chunks[slot] = make([]int32, len(dst))
+		if len(g.chunks[slot]) != size {
+			g.chunks[slot] = make([]int32, size)
 		}
 		if _, err := g.Read(g.chunks[slot]); err != nil {
-			return
+			return nil
 		}
 		g.index[slot] = g.next
 	}
-	slot := i % groupChunks
-	if g.index[slot] != i {
-		return
+	if slot := i % groupChunks; g.index[slot] == i {
+		return g.chunks[slot]
 	}
-	chunk := g.chunks[slot]
-	for j := range min(len(dst), len(chunk)) {
-		dst[j] = min(max(dst[j]+chunk[j], math.MinInt16), math.MaxInt16)
-	}
+	return nil
 }
 
 // Mix is a speaker's Sendspin source: its own AirPlay target plus every group
@@ -74,6 +95,14 @@ func (g *Group) mixAt(dst []int32, playbackTime int64) {
 type Mix struct {
 	*Pipeline
 	groups []*Group
+	delay  atomic.Int64 // group audio hold-back, in samples
+}
+
+// SetDelay holds this speaker's group audio back by d (at most MaxDelay), for
+// a player that is heard early.
+func (m *Mix) SetDelay(d time.Duration) {
+	frames := int64(d) * int64(GroupFormat.SampleRate) / int64(time.Second)
+	m.delay.Store(frames * Channels)
 }
 
 func NewMix(bufferFrames int, groups []*Group) (*Mix, error) {
@@ -90,7 +119,7 @@ func (m *Mix) ReadAt(dst []int32, playbackTime int64) (int, error) {
 	n, err := m.Read(dst)
 	if err == nil && m.Format() == GroupFormat {
 		for _, g := range m.groups {
-			g.mixAt(dst, playbackTime)
+			g.mixAt(dst, playbackTime, int(m.delay.Load()))
 		}
 	}
 	return n, err

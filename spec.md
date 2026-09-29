@@ -49,10 +49,10 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
 ### 2.4 Configuración (`state/config.xml`)
 
 ```xml
-<airplay-sendspin version="1">
+<airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
   <speakers>
     <speaker id="cocina" client_id="…" airplay_name="Cocina"
-             direction="outbound" port="7000">
+             direction="outbound" port="7000" delay_ms="0">
       <endpoint instance="…" host="…" port="8928" path="/sendspin"/>
     </speaker>
   </speakers>
@@ -65,7 +65,11 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
 ```
 
 - `id`: clave estable y legible (slug); `client_id`: identidad Sendspin.
+- `airplay_suffix`: se añade a todos los nombres AirPlay de altavoz y grupo;
+  `""` lo elimina. No se repite por speaker porque es una política global.
 - Puertos: bloques de 10 desde 7000, repartidos entre altavoces y grupos.
+- `delay_ms`: 0–500 ms; retiene sólo el audio de grupo de ese altavoz. Al
+  primer `client/hello` se escribe `0`; después el XML manda.
 - Grupos escritos a mano: id único, miembros existentes y sin repetir (si no,
   error al cargar). Cambios en el XML requieren reiniciar.
 - Anuncio AirPlay: `airplay_name + " (Sendspin)"`; MAC virtual derivada de
@@ -116,14 +120,17 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
   modelo. Referencia: 1 ms ≈ 34 cm de recorrido del sonido; multiroom tolera
   varios ms, una pareja estéreo pide ~1 ms.
 - Medido en el Dot: EchoLocal supone 150 ms fijos de latencia de salida
-  (`speaker.HardwareTail`), pero su anillo ALSA es de 4096 frames = 85 ms, así
-  que suena ~65 ms antes de la hora que manda el servidor. Su código lo da por
-  bueno porque es igual en todos los Dot: entre Dots no se nota, con otros
-  aparatos sí. El Echo Show 5 usa Kiosk Satellite (Flutter + sendspin-cpp), que
-  mide su latencia real con `AudioTrack.getTimestamp`. En el grupo Dot + Show
-  se oía eco; se corrigió en el Show con "Ajuste de sincronización de audio"
-  = −100 ms (de oído, en vivo, sin tocar el bridge). El arreglo de verdad es
-  que EchoLocal use el retardo real de ALSA.
+  (`speaker.HardwareTail`), pero su cola ALSA (anillo de 4096 frames) suele
+  tener ~3264 frames (~68 ms; entre 50 y 85 ms), así que suena ~80 ms antes de
+  la hora que manda el servidor. Su código lo da por bueno porque es igual en
+  todos los Dot: entre Dots no se nota, con otros aparatos sí. El Echo Show 5
+  usa Kiosk Satellite (Flutter + sendspin-cpp), que mide su latencia real con
+  `AudioTrack.getTimestamp`. En el grupo Dot + Show se oía eco (con el ajuste
+  del Show a −100 ms desaparecía, de oído).
+- No hay corrección automática por modelo: una prueba posterior con ambos
+  retardos a `0` no reprodujo el desfase. Al primer `client/hello` cada speaker
+  recibe `delay_ms="0"` en el XML; `pcm.Mix.SetDelay` usa el valor que se edite
+  después, sólo para audio de grupo (lee la caché en `t − delay`).
 
 ## 4. Grupos multiroom (implementado, `feat/groups`)
 
@@ -197,8 +204,7 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
   la compensación la hace el propio reproductor.
 - Es el equivalente protocolario del `sync_delay_ms` de sendspin-server.
 - EchoLocal 0.0.7 no lo implementa (su estado sólo lleva volumen y mute) y
-  sendspin-go tampoco: un desfase fijo entre aparatos se corrige en el otro
-  aparato si tiene ajuste propio (Kiosk Satellite, §3) o en el bridge.
+  sendspin-go tampoco: el bridge aplica el `delay_ms` configurado (§2.4, §3).
 
 ### 5.4 Canales y estéreo
 - La spec oficial (Sendspin/spec) no tiene parejas estéreo: `channels` es sólo
@@ -242,11 +248,9 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
 ## 6. Pendiente y decisiones abiertas
 
 - [x] Prueba audible del grupo "Toda la casa" (Dot outbound + Show inbound):
-      suena en toda la casa; el eco inicial (Dot ~65 ms adelantado, §3) se
-      corrigió con el ajuste de −100 ms del Show.
-- [ ] `delay_ms` por altavoz en el XML, sólo si aparece un aparato sin ajuste
-      propio que lo necesite: el miembro lee el chunk de grupo de `t − delay`
-      (la caché tiene que cubrir el retardo).
+      suena en toda la casa; con `delay_ms="0"` no se reprodujo el desfase.
+- [ ] Si vuelve un desfase reproducible: medirlo y escribir `delay_ms` del
+      speaker afectado en el XML; no añadir quirks por modelo.
 - [ ] Variantes por formato dentro del grupo (fechadas por contenido, §5.2);
       eliminaría `GroupFormat` fijo y la preferencia de formato. Esperar a que
       haya un altavoz que lo necesite.
@@ -256,8 +260,8 @@ fuerte por el formato del grupo (§4). La `Pipeline` se configura en el hook
       así que (L,L) suena como L). Decidir volumen: conservar la diferencia
       (hace de balance) o forzar el mínimo como sendspin-server. Riesgo real: la
       sincronía fina; unos ms entre aparatos descentran la imagen (EchoLocal
-      corrige a ±2 ms, no soporta `output_delay` y va ~65 ms adelantado, §3) →
-      ajuste del otro aparato o `delay_ms` por altavoz.
+      corrige a ±2 ms y no soporta `output_delay` (§3): para estéreo haría
+      falta medir cualquier desfase que reaparezca.
 - [ ] Opcional: alinear el ticker a la rejilla de 20 ms (hoy el envío puede
       saltar un tick; inocuo para EchoLocal).
 

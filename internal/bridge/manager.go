@@ -24,7 +24,6 @@ const (
 	defaultPortRange  = 10
 	defaultServerPort = 8927
 	defaultServerName = "AirPlay Sendspin"
-	airPlaySuffix     = " (Sendspin)"
 )
 
 type Config struct {
@@ -41,10 +40,11 @@ type volumeController interface {
 }
 
 type Manager struct {
-	portRange  uint16
-	serverPort uint16
-	serverName string
-	registry   *registry
+	portRange     uint16
+	serverPort    uint16
+	serverName    string
+	airPlaySuffix string
+	registry      *registry
 
 	mu            sync.Mutex
 	ctx           context.Context
@@ -78,11 +78,12 @@ func New(config Config) (*Manager, error) {
 		return nil, err
 	}
 	return &Manager{
-		portRange:  config.PortRange,
-		serverPort: config.ServerPort,
-		serverName: config.ServerName,
-		registry:   registry,
-		targets:    make(map[string]*target),
+		portRange:     config.PortRange,
+		serverPort:    config.ServerPort,
+		serverName:    config.ServerName,
+		airPlaySuffix: registry.airPlaySuffix(),
+		registry:      registry,
+		targets:       make(map[string]*target),
 	}, nil
 }
 
@@ -199,7 +200,7 @@ func (m *Manager) startGroups() error {
 			return err
 		}
 		members := g.Speakers
-		airPlay, err := advertiseAirPlay("group:"+g.ID, g.AirPlayName, g.Port, m.portRange, audio, func(volume float64) { m.groupVolume(members, volume) })
+		airPlay, err := advertiseAirPlay("group:"+g.ID, g.AirPlayName, m.airPlaySuffix, g.Port, m.portRange, audio, func(volume float64) { m.groupVolume(members, volume) })
 		if err != nil {
 			_ = audio.Close()
 			return err
@@ -365,7 +366,7 @@ func (m *Manager) ensureTarget(ctx context.Context, speaker speaker) error {
 		m.mu.Unlock()
 		return nil
 	}
-	t, err := newTarget(ctx, speaker, m.portRange, m.memberGroups[speaker.ID], m.rememberClient)
+	t, err := newTarget(ctx, speaker, m.portRange, m.airPlaySuffix, m.memberGroups[speaker.ID], m.rememberClient)
 	if err == nil {
 		m.targets[speaker.ID] = t
 	}
@@ -382,10 +383,16 @@ func (m *Manager) ensureTarget(ctx context.Context, speaker speaker) error {
 	return nil
 }
 
-func (m *Manager) rememberClient(speakerID, clientID string) error {
+// rememberClient binds a player to its speaker and returns the configured
+// delay_ms, materializing zero in config.xml on its first hello.
+func (m *Manager) rememberClient(speakerID, clientID string) (time.Duration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.registry.setClientID(speakerID, clientID)
+	if err := m.registry.setClientID(speakerID, clientID); err != nil {
+		return 0, err
+	}
+	ms, err := m.registry.delay(speakerID)
+	return time.Duration(ms) * time.Millisecond, err
 }
 
 func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.AudioSource, error) {
@@ -401,7 +408,9 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 		if err := t.configurePlayer(hello.PlayerV1Support); err != nil {
 			return nil, err
 		}
-		t.setClientID(hello.ClientID)
+		if err := t.onClientHello(hello); err != nil {
+			return nil, err
+		}
 		t.setVolumeController(control)
 		return t.pipeline, nil
 	}
@@ -409,7 +418,7 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 		m.mu.Unlock()
 		return nil, fmt.Errorf("bridge is not running")
 	}
-	t, err := newTarget(m.ctx, speaker, m.portRange, m.memberGroups[speaker.ID], m.rememberClient)
+	t, err := newTarget(m.ctx, speaker, m.portRange, m.airPlaySuffix, m.memberGroups[speaker.ID], m.rememberClient)
 	if err == nil {
 		m.targets[speaker.ID] = t
 	}
@@ -423,7 +432,9 @@ func (m *Manager) sourceForInboundClient(hello protocol.ClientHello) (sendspin.A
 	if err := t.configurePlayer(hello.PlayerV1Support); err != nil {
 		return nil, err
 	}
-	t.setClientID(hello.ClientID)
+	if err := t.onClientHello(hello); err != nil {
+		return nil, err
+	}
 	t.setVolumeController(control)
 	return t.pipeline, nil
 }
@@ -432,7 +443,7 @@ type target struct {
 	speaker        speaker
 	pipeline       *pcm.Mix
 	airPlay        *airPlayTarget
-	rememberClient func(speakerID, clientID string) error
+	rememberClient func(speakerID, clientID string) (time.Duration, error)
 	sessionMu      sync.RWMutex
 	volumeControl  volumeController
 	clientID       string
@@ -444,7 +455,7 @@ type target struct {
 	once           sync.Once
 }
 
-func newTarget(parent context.Context, speaker speaker, portRange uint16, groups []*pcm.Group, rememberClient func(string, string) error) (*target, error) {
+func newTarget(parent context.Context, speaker speaker, portRange uint16, suffix string, groups []*pcm.Group, rememberClient func(string, string) (time.Duration, error)) (*target, error) {
 	if speaker.ID == "" || speaker.AirPlayName == "" || speaker.Port == 0 {
 		return nil, fmt.Errorf("invalid configured speaker")
 	}
@@ -465,7 +476,7 @@ func newTarget(parent context.Context, speaker speaker, portRange uint16, groups
 		done:           make(chan struct{}),
 	}
 
-	if t.airPlay, err = advertiseAirPlay(speaker.ID, speaker.AirPlayName, speaker.Port, portRange, pipeline, t.onVolume); err != nil {
+	if t.airPlay, err = advertiseAirPlay(speaker.ID, speaker.AirPlayName, suffix, speaker.Port, portRange, pipeline, t.onVolume); err != nil {
 		_ = pipeline.Close()
 		cancel()
 		return nil, err
@@ -479,15 +490,15 @@ type airPlayTarget struct {
 	advertiser *airplay.Advertiser
 }
 
-// advertiseAirPlay publishes "name (Sendspin)" with an AirPlay identity
-// derived from key and feeds its PCM to sink.
-func advertiseAirPlay(key, name string, port, portRange uint16, sink pcm.Sink, onVolume func(float64)) (*airPlayTarget, error) {
+// advertiseAirPlay publishes name+suffix with an AirPlay identity derived
+// from key and feeds its PCM to sink.
+func advertiseAirPlay(key, name, suffix string, port, portRange uint16, sink pcm.Sink, onVolume func(float64)) (*airPlayTarget, error) {
 	ip, err := airplay.LANIPv4()
 	if err != nil {
 		return nil, err
 	}
 	mac := virtualMAC(key)
-	name = airPlayTargetName(name)
+	name = airPlayTargetName(name, suffix)
 	receiver, err := raop.New(raop.Config{
 		Name:      name,
 		MAC:       mac,
@@ -559,12 +570,18 @@ func (t *target) run() {
 }
 
 func (t *target) onClientHello(hello protocol.ClientHello) error {
+	var delay time.Duration
 	if t.rememberClient != nil {
-		if err := t.rememberClient(t.speaker.ID, hello.ClientID); err != nil {
+		var err error
+		if delay, err = t.rememberClient(t.speaker.ID, hello.ClientID); err != nil {
 			return err
 		}
 	}
 	t.setClientID(hello.ClientID)
+	if delay > 0 && t.pipeline.Grouped() {
+		log.Printf("Sendspin player %q: group audio held back %v (delay_ms)", t.speaker.ID, delay)
+	}
+	t.pipeline.SetDelay(delay)
 	return nil
 }
 
@@ -683,7 +700,7 @@ func airPlayVolumePercent(volume float64) int {
 	return int(math.Round(volume * 100))
 }
 
-func airPlayTargetName(name string) string { return name + airPlaySuffix }
+func airPlayTargetName(name, suffix string) string { return name + suffix }
 
 func virtualMAC(key string) [6]byte {
 	sum := sha256.Sum256([]byte(key))

@@ -74,8 +74,13 @@ func TestAirPlayVolumePercent(t *testing.T) {
 }
 
 func TestAirPlayTargetName(t *testing.T) {
-	if got := airPlayTargetName("Cocina"); got != "Cocina (Sendspin)" {
-		t.Fatalf("target name = %q", got)
+	for _, test := range []struct{ suffix, want string }{
+		{" (Sendspin)", "Cocina (Sendspin)"},
+		{"", "Cocina"},
+	} {
+		if got := airPlayTargetName("Cocina", test.suffix); got != test.want {
+			t.Errorf("suffix %q: target name = %q, want %q", test.suffix, got, test.want)
+		}
 	}
 }
 

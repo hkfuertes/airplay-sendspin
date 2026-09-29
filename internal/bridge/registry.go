@@ -9,19 +9,22 @@ import (
 	"unicode"
 
 	"github.com/Sendspin/sendspin-go/pkg/discovery"
+	"github.com/hkfuertes/goplay2-sendspin/internal/pcm"
 )
 
 const (
-	defaultConfigPath = "config.xml"
-	directionInbound  = "inbound"
-	directionOutbound = "outbound"
+	defaultConfigPath    = "config.xml"
+	defaultAirPlaySuffix = " (Sendspin)"
+	directionInbound     = "inbound"
+	directionOutbound    = "outbound"
 )
 
 type registryDocument struct {
-	XMLName  xml.Name  `xml:"airplay-sendspin"`
-	Version  string    `xml:"version,attr"`
-	Speakers []speaker `xml:"speakers>speaker"`
-	Groups   []group   `xml:"groups>group"`
+	XMLName       xml.Name  `xml:"airplay-sendspin"`
+	Version       string    `xml:"version,attr"`
+	AirPlaySuffix *string   `xml:"airplay_suffix,attr,omitempty"`
+	Speakers      []speaker `xml:"speakers>speaker"`
+	Groups        []group   `xml:"groups>group"`
 }
 
 // group is one extra AirPlay target that plays in sync on every member
@@ -46,6 +49,7 @@ type speaker struct {
 	AirPlayName string   `xml:"airplay_name,attr"`
 	Direction   string   `xml:"direction,attr"`
 	Port        uint16   `xml:"port,attr"`
+	DelayMs     *int     `xml:"delay_ms,attr,omitempty"` // group audio hold-back; nil until first hello
 	Endpoint    endpoint `xml:"endpoint"`
 }
 
@@ -71,11 +75,12 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 		path:      path,
 		portBase:  portBase,
 		portRange: portRange,
-		doc:       registryDocument{Version: "1"},
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		suffix := defaultAirPlaySuffix
+		r.doc = registryDocument{Version: "1", AirPlaySuffix: &suffix}
 		return r, nil
 	}
 	if err != nil {
@@ -92,6 +97,11 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 	}
 
 	dirty := false
+	if r.doc.AirPlaySuffix == nil {
+		suffix := defaultAirPlaySuffix
+		r.doc.AirPlaySuffix = &suffix
+		dirty = true
+	}
 	seenIDs := make(map[string]bool, len(r.doc.Speakers))
 	seenClientIDs := make(map[string]bool, len(r.doc.Speakers))
 	for i := range r.doc.Speakers {
@@ -124,6 +134,9 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 			}
 			s.Port = port
 			dirty = true
+		}
+		if s.DelayMs != nil && (*s.DelayMs < 0 || int64(*s.DelayMs) > pcm.MaxDelay.Milliseconds()) {
+			return nil, fmt.Errorf("speaker %q has delay_ms %d, want 0..%d", s.ID, *s.DelayMs, pcm.MaxDelay.Milliseconds())
 		}
 		s.Endpoint.Path = normalizePath(s.Endpoint.Path)
 	}
@@ -169,6 +182,13 @@ func (r *registry) speakers() []speaker {
 }
 
 func (r *registry) groups() []group { return r.cloneDocument().Groups }
+
+func (r *registry) airPlaySuffix() string {
+	if r.doc.AirPlaySuffix == nil {
+		return defaultAirPlaySuffix
+	}
+	return *r.doc.AirPlaySuffix
+}
 
 func (r *registry) speaker(id string) (speaker, bool) {
 	for _, s := range r.doc.Speakers {
@@ -247,6 +267,24 @@ func (r *registry) setClientID(id, clientID string) error {
 		return r.save(next)
 	}
 	return fmt.Errorf("unknown speaker %q", id)
+}
+
+// delay returns the speaker's delay_ms, writing the initial zero to config.xml
+// when a speaker first says hello. config.xml wins after that.
+func (r *registry) delay(id string) (int, error) {
+	next := r.cloneDocument()
+	for i, s := range next.Speakers {
+		if s.ID != id {
+			continue
+		}
+		if s.DelayMs != nil {
+			return *s.DelayMs, nil
+		}
+		delay := 0
+		next.Speakers[i].DelayMs = &delay
+		return delay, r.save(next)
+	}
+	return 0, fmt.Errorf("unknown speaker %q", id)
 }
 
 // upsertInbound claims a player that connected to the bridge's advertised
