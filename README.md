@@ -21,8 +21,8 @@ images; the workflow builds one architecture at a time. Home Assistant pulls
 the image tag with that version. As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
-them. Push a matching `v<version>` tag to publish a GitHub Release with Linux
-amd64 and arm64 binary tarballs.
+them. GitHub Releases are published manually and include Linux amd64 and arm64
+binary tarballs.
 
 ## `state/config.xml`
 

@@ -1,7 +1,6 @@
 name: Add-on image
 
-# Publishes the image Home Assistant pulls; bump version in
-# airplay-sendspin/config.yaml to release.
+# Publishes the image Home Assistant pulls after a version bump reaches main.
 on:
   push:
     branches: [main]
