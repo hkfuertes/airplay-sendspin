@@ -27,8 +27,9 @@ iPhone ─RAOP─> libraop (PCM S16LE estéreo, 44.1 kHz)
   da el mismo `play_start_us`; si no llega PCM a tiempo, rellena con silencio.
 - Un listener HTTP interno en `:8080` sirve el bundle Preact/Tailwind
   precompilado. Su token fijo está compilado en la UI; no se debe exponer fuera
-  de una LAN de confianza. Guardar valida el XML y reinicia ordenadamente el
-  bridge, no cambia targets en caliente.
+  de una LAN de confianza. El volumen individual se aplica en vivo a los
+  altavoces conectados y no se escribe en XML. Guardar valida el XML y reinicia
+  ordenadamente el bridge, no cambia targets en caliente.
 
 ## Configuración
 

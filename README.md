@@ -21,8 +21,9 @@ Host networking is required for mDNS and AirPlay discovery.
 
 The bridge serves its internal editor on port `8080`; open
 `http://192.168.1.10:8080/` to edit speaker names, visibility, signed group
-offsets, and groups. Discovery-managed IDs, ports, connection direction, and
-endpoints stay out of the UI. Its fixed token is compiled into the internal UI,
+offsets, groups, and the live volume of connected speakers. Volume is not
+persisted. Discovery-managed IDs, ports, connection direction, and endpoints
+stay out of the UI. Its fixed token is compiled into the internal UI,
 so do not expose this listener outside a trusted LAN.
 
 Saving validates and atomically writes `config.xml`, then restarts the bridge

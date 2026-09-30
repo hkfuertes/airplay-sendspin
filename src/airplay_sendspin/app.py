@@ -288,6 +288,8 @@ class Manager:
             port=self.config.web_port,
             advertised_host=self.address,
             registry=lambda: self.registry,
+            speaker_state=self.speaker_state,
+            set_speaker_volume=self.set_speaker_volume,
             replace_registry=self.replace_registry,
             restart=self.request_restart,
         )
@@ -334,6 +336,17 @@ class Manager:
 
     def replace_registry(self, registry: Registry) -> None:
         self.registry = registry
+
+    def speaker_state(self, speaker_id: str) -> dict:
+        target = self.targets.get(speaker_id)
+        return {"connected": target is not None and target.player is not None, "volume": target.volume if target is not None else 100}
+
+    def set_speaker_volume(self, speaker_id: str, volume: int) -> int | None:
+        target = self.targets.get(speaker_id)
+        if target is None or target.player is None:
+            return None
+        target.set_volume(volume)
+        return target.volume
 
     def request_restart(self) -> None:
         LOG.info("Restarting bridge to apply configuration changes")

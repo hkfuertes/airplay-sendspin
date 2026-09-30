@@ -32,6 +32,8 @@ class ConfigWeb:
         port: int,
         advertised_host: str,
         registry: Callable[[], Registry],
+        speaker_state: Callable[[str], dict],
+        set_speaker_volume: Callable[[str, int], int | None],
         replace_registry: Callable[[Registry], None],
         restart: Callable[[], None],
     ) -> None:
@@ -42,6 +44,8 @@ class ConfigWeb:
         self._port = port
         self._advertised_host = advertised_host
         self._registry = registry
+        self._speaker_state = speaker_state
+        self._set_speaker_volume = set_speaker_volume
         self._replace_registry = replace_registry
         self._restart = restart
         self._token = CONFIG_TOKEN
@@ -62,6 +66,7 @@ class ConfigWeb:
         app.router.add_get("/api/health", self._health)
         app.router.add_get("/api/config", self._get_config)
         app.router.add_put("/api/config", self._put_config)
+        app.router.add_put("/api/speakers/{speaker_id}/volume", self._put_volume)
         app.router.add_static("/", static_root, show_index=False)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -92,7 +97,7 @@ class ConfigWeb:
         return web.json_response({"ok": True})
 
     async def _get_config(self, _request: web.Request) -> web.Response:
-        return web.json_response(registry_to_payload(self._registry()))
+        return web.json_response(self._payload())
 
     async def _put_config(self, request: web.Request) -> web.Response:
         try:
@@ -106,7 +111,23 @@ class ConfigWeb:
         if not self._restart_scheduled:
             self._restart_scheduled = True
             asyncio.get_running_loop().call_later(0.1, self._restart)
-        return web.json_response({"config": registry_to_payload(registry), "restarting": True})
+        return web.json_response({"config": self._payload(), "restarting": True})
+
+    async def _put_volume(self, request: web.Request) -> web.Response:
+        try:
+            volume = _integer(_object(await request.json(), "volume").get("volume"), "volume", 0, 100)
+        except (ValueError, json.JSONDecodeError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+        updated = self._set_speaker_volume(request.match_info["speaker_id"], volume)
+        if updated is None:
+            return web.json_response({"error": "speaker is not connected"}, status=409)
+        return web.json_response({"volume": updated})
+
+    def _payload(self) -> dict:
+        payload = registry_to_payload(self._registry())
+        for speaker in payload["speakers"]:
+            speaker.update(self._speaker_state(speaker["id"]))
+        return payload
 
 
 def registry_to_payload(registry: Registry) -> dict:
