@@ -7,7 +7,8 @@ import ipaddress
 import socket
 from dataclasses import dataclass
 
-from zeroconf import ServiceInfo, Zeroconf
+from zeroconf import IPVersion, ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 RAOP_TYPE = "_raop._tcp.local."
 RAOP_PROPERTIES = {
@@ -56,7 +57,7 @@ class Advertiser:
     mac: bytes
     address: str
     port: int
-    _zeroconf: Zeroconf | None = None
+    _zeroconf: AsyncZeroconf | None = None
     _info: ServiceInfo | None = None
 
     def __post_init__(self) -> None:
@@ -72,16 +73,25 @@ class Advertiser:
             port=self.port,
             properties=RAOP_PROPERTIES,
         )
-        self._zeroconf = Zeroconf()
-        self._zeroconf.register_service(self._info)
+    async def start(self) -> None:
+        if self._zeroconf is not None:
+            return
+        zeroconf = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=[self.address])
+        try:
+            await zeroconf.async_register_service(self._info)
+        except BaseException:
+            await zeroconf.async_close()
+            raise
+        self._zeroconf = zeroconf
 
-    def close(self) -> None:
-        if self._zeroconf is None:
+    async def close(self) -> None:
+        zeroconf, info = self._zeroconf, self._info
+        self._zeroconf = None
+        self._info = None
+        if zeroconf is None:
             return
         try:
-            if self._info is not None:
-                self._zeroconf.unregister_service(self._info)
+            if info is not None:
+                await zeroconf.async_unregister_service(info)
         finally:
-            self._zeroconf.close()
-            self._zeroconf = None
-            self._info = None
+            await zeroconf.async_close()

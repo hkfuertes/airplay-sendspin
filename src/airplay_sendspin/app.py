@@ -52,7 +52,7 @@ class AirPlayInput:
         self.receiver: Receiver | None = None
         self.advertiser: Advertiser | None = None
 
-    def start(self) -> None:
+    async def start(self) -> None:
         mac = virtual_mac(self.key)
         self.receiver = Receiver(
             self.name + self.manager.registry.airplay_suffix,
@@ -68,7 +68,11 @@ class AirPlayInput:
                 self.manager.address,
                 self.receiver.port,
             )
+            await self.advertiser.start()
         except BaseException:
+            if self.advertiser is not None:
+                await self.advertiser.close()
+                self.advertiser = None
             self.receiver.close()
             self.receiver = None
             raise
@@ -82,9 +86,9 @@ class AirPlayInput:
         while event := self.receiver.read_event():
             yield event
 
-    def close(self) -> None:
+    async def close(self) -> None:
         if self.advertiser is not None:
-            self.advertiser.close()
+            await self.advertiser.close()
             self.advertiser = None
         if self.receiver is not None:
             self.receiver.close()
@@ -101,8 +105,8 @@ class GroupTarget:
         self.buffer = GroupBuffer(self.input.read_pcm)
         self.active = False
 
-    def start(self) -> None:
-        self.input.start()
+    async def start(self) -> None:
+        await self.input.start()
         LOG.info("AirPlay group %r (%s) -> %d speakers", self.group.airplay_name, self.group.id, len(self.group.speaker_ids))
 
     def handle_events(self) -> None:
@@ -122,8 +126,8 @@ class GroupTarget:
         if self.active:
             self.buffer.mix_into(output, playback_chunk, delay_ms)
 
-    def close(self) -> None:
-        self.input.close()
+    async def close(self) -> None:
+        await self.input.close()
 
 
 class Target:
@@ -141,9 +145,9 @@ class Target:
         self.volume = 100
         self.remove_player_listener = None
 
-    def start(self) -> None:
+    async def start(self) -> None:
         if self.input is not None:
-            self.input.start()
+            await self.input.start()
         LOG.info("AirPlay target %r (%s)", self.speaker.airplay_name, self.speaker.id)
 
     async def attach(self, player) -> None:
@@ -216,7 +220,7 @@ class Target:
         self._stop_stream()
         self._remove_player_listener()
         if self.input is not None:
-            self.input.close()
+            await self.input.close()
 
     def _stop_stream(self) -> None:
         if self.stream is not None:
@@ -271,7 +275,7 @@ class Manager:
         )
         for group in self.registry.groups():
             target = GroupTarget(self, group)
-            target.start()
+            await target.start()
             self.group_targets[group.id] = target
             for speaker_id in group.speaker_ids:
                 self.member_groups.setdefault(speaker_id, []).append(target)
@@ -299,7 +303,7 @@ class Manager:
             await target.close()
         self.targets.clear()
         for target in self.group_targets.values():
-            target.close()
+            await target.close()
         self.group_targets.clear()
         if self.server is not None:
             await self.server.close()
@@ -347,7 +351,7 @@ class Manager:
         target = Target(self, speaker, self.member_groups.get(speaker.id, []))
         self.targets[speaker.id] = target
         try:
-            target.start()
+            await target.start()
         except BaseException:
             self.targets.pop(speaker.id, None)
             await target.close()
