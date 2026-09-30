@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,6 +15,8 @@ from .registry import Endpoint, Group, Registry, Speaker
 
 LOG = logging.getLogger(__name__)
 TOKEN_HEADER = "X-Config-Token"
+# ponytail: internal-only UI; replace this before exposing it outside the trusted LAN.
+CONFIG_TOKEN = "airplay-sendspin"
 
 
 class ConfigWeb:
@@ -44,14 +44,14 @@ class ConfigWeb:
         self._registry = registry
         self._replace_registry = replace_registry
         self._restart = restart
-        self._token = _load_token(Path(config_path).parent / ".config-web-token")
+        self._token = CONFIG_TOKEN
         self._runner: web.AppRunner | None = None
         self._save_lock = asyncio.Lock()
         self._restart_scheduled = False
 
     @property
     def url(self) -> str:
-        return f"http://{self._advertised_host}:{self._port}/?token={self._token}"
+        return f"http://{self._advertised_host}:{self._port}/"
 
     async def start(self) -> None:
         static_root = Path(__file__).with_name("web")
@@ -234,22 +234,3 @@ def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{label} must be true or false")
     return value
-
-
-def _load_token(path: Path) -> str:
-    try:
-        token = path.read_text().strip()
-    except FileNotFoundError:
-        token = ""
-    if token:
-        return token
-    token = secrets.token_urlsafe(24)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".config-web-token-", delete=False) as tmp:
-        tmp.write((token + "\n").encode())
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        name = tmp.name
-    os.chmod(name, 0o600)
-    os.replace(name, path)
-    return token
