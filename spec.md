@@ -146,7 +146,8 @@ paquetes GHCR públicos (o registro con credenciales en Supervisor).
 - No hay corrección automática por modelo: una prueba posterior con ambos
   retardos a `0` no reprodujo el desfase. Al primer `client/hello` cada speaker
   recibe `delay_ms="0"` en el XML; `pcm.Mix.SetDelay` usa el valor que se edite
-  después, sólo para audio de grupo (lee la caché en `t − delay`).
+  después (−500 a 500 ms, inbound u outbound), sólo para audio de grupo (lee la
+  caché en `t − delay`: positivo retrasa, negativo adelanta).
 
 ## 4. Grupos multiroom (implementado, `feat/groups`)
 

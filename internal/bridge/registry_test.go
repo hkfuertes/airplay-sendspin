@@ -104,7 +104,7 @@ func TestRegistryDelayPersistsAndHonorsConfig(t *testing.T) {
 	}
 
 	// A hand-written value is authoritative after discovery.
-	data = []byte(strings.Replace(string(data), `delay_ms="0"`, `delay_ms="100"`, 1))
+	data = []byte(strings.Replace(string(data), `delay_ms="0"`, `delay_ms="-100"`, 1))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +112,36 @@ func TestRegistryDelayPersistsAndHonorsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := r.delay(s.ID); err != nil || got != 100 {
-		t.Fatalf("configured delay = (%d, %v), want (100, nil)", got, err)
+	if got, err := r.delay(s.ID); err != nil || got != -100 {
+		t.Fatalf("configured delay = (%d, %v), want (-100, nil)", got, err)
+	}
+}
+
+func TestRegistryAcceptsDelayBoundsForBothDirections(t *testing.T) {
+	for _, tc := range []struct {
+		direction string
+		delay     string
+	}{
+		{directionInbound, "-500"},
+		{directionInbound, "500"},
+		{directionOutbound, "-500"},
+		{directionOutbound, "500"},
+	} {
+		t.Run(tc.direction+"/"+tc.delay, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.xml")
+			data := `<?xml version="1.0"?><airplay-sendspin version="1"><speakers><speaker id="dot" direction="` + tc.direction + `" port="7000" delay_ms="` + tc.delay + `"/></speakers></airplay-sendspin>`
+			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadRegistry(path, 7000, 10); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
 func TestRegistryRejectsInvalidDelay(t *testing.T) {
-	for _, delay := range []string{"-1", "501"} {
+	for _, delay := range []string{"-501", "501"} {
 		t.Run(delay, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.xml")
 			data := `<?xml version="1.0"?><airplay-sendspin version="1"><speakers><speaker id="dot" direction="outbound" port="7000" delay_ms="` + delay + `"/></speakers></airplay-sendspin>`

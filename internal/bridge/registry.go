@@ -51,7 +51,7 @@ type speaker struct {
 	Direction   string   `xml:"direction,attr"`
 	Port        uint16   `xml:"port,attr"`
 	Hidden      bool     `xml:"hidden,attr"`             // no own AirPlay target; still plays its groups
-	DelayMs     *int     `xml:"delay_ms,attr,omitempty"` // group audio hold-back; nil until first hello
+	DelayMs     *int     `xml:"delay_ms,attr,omitempty"` // group audio offset; nil until first hello
 	Endpoint    endpoint `xml:"endpoint"`
 }
 
@@ -132,8 +132,8 @@ func loadRegistry(path string, portBase, portRange uint16) (*registry, error) {
 			}
 			s.Port = port
 		}
-		if s.DelayMs != nil && (*s.DelayMs < 0 || int64(*s.DelayMs) > pcm.MaxDelay.Milliseconds()) {
-			return nil, fmt.Errorf("speaker %q has delay_ms %d, want 0..%d", s.ID, *s.DelayMs, pcm.MaxDelay.Milliseconds())
+		if s.DelayMs != nil && (int64(*s.DelayMs) < -pcm.MaxDelay.Milliseconds() || int64(*s.DelayMs) > pcm.MaxDelay.Milliseconds()) {
+			return nil, fmt.Errorf("speaker %q has delay_ms %d, want -%d..%d", s.ID, *s.DelayMs, pcm.MaxDelay.Milliseconds(), pcm.MaxDelay.Milliseconds())
 		}
 		s.Endpoint.Path = normalizePath(s.Endpoint.Path)
 	}
