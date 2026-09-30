@@ -2,3 +2,5 @@ bin/
 coverage/
 config.xml
 state/
+__pycache__/
+*.py[cod]
