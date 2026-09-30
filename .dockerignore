@@ -8,3 +8,5 @@ third_party/
 __pycache__/
 **/__pycache__/
 *.py[cod]
+frontend/node_modules/
+out/

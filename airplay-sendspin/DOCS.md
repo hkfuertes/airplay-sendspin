@@ -8,7 +8,9 @@ folder. For a GitHub repository, Supervisor mounts that folder at
 `/addon_configs/<repository-id>_airplay_sendspin/` in File editor or Samba,
 and at `/config` inside this add-on. Edit `config.xml` to rename targets, change
 the shared suffix (`airplay_suffix`), or add `<groups>`, then restart the
-add-on.
+add-on. Prefer the internal visual editor at port 8080; saving there restarts
+the bridge automatically. Its per-speaker volume control is live only and is
+not written to `config.xml`. Do not expose that listener outside the trusted LAN.
 
 Set `hidden="true"` on a speaker to remove its individual AirPlay target. A
 hidden speaker still feeds any group that contains it; outside all groups the

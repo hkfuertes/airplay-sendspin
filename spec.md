@@ -3,8 +3,8 @@
 ## Objetivo
 
 Un destino AirPlay 1 por altavoz Sendspin descubierto y otro por cada grupo
-configurado. Sin interfaz web: descubrimiento mDNS y `config.xml` persistente.
-No soporta AirPlay 2 ni parejas estéreo.
+configurado. mDNS, `config.xml` persistente y un editor web mínimo para
+cambiarlo visualmente. No soporta AirPlay 2 ni parejas estéreo.
 
 ## Runtime
 
@@ -25,6 +25,11 @@ iPhone ─RAOP─> libraop (PCM S16LE estéreo, 44.1 kHz)
   y mantiene las conexiones de entrada y salida.
 - El scheduler genera chunks de 20 ms. Cuando hay varios altavoces activos les
   da el mismo `play_start_us`; si no llega PCM a tiempo, rellena con silencio.
+- Un listener HTTP interno en `:8080` sirve el bundle Preact/Tailwind
+  precompilado. Su token fijo está compilado en la UI; no se debe exponer fuera
+  de una LAN de confianza. El volumen individual se aplica en vivo a los
+  altavoces conectados y no se escribe en XML. Guardar valida el XML y reinicia
+  ordenadamente el bridge, no cambia targets en caliente.
 
 ## Configuración
 
@@ -68,9 +73,10 @@ antes del stream para conservar audio individual + grupos y `delay_ms` firmado.
 
 ## Build y add-on
 
-Docker clona la revisión fijada de libraop, aplica `patches/libraop/`, compila
-la extensión CFFI y empaqueta Python 3.13 con `aiosendspin`. La etapa `runtime`
-usa `/data/config.xml`; `addon` usa `/config/config.xml` y host networking.
+Docker compila el bundle Preact/Tailwind en una etapa Node, clona la revisión
+fijada de libraop, aplica `patches/libraop/`, compila la extensión CFFI y
+empaqueta Python 3.13 con `aiosendspin`. La etapa `runtime` usa
+`/data/config.xml`; `addon` usa `/config/config.xml` y host networking.
 
 El workflow del add-on publica imágenes amd64 y aarch64 al cambiar
 `airplay-sendspin/config.yaml` en `main`.
@@ -80,4 +86,5 @@ El workflow del add-on publica imágenes amd64 y aarch64 al cambiar
 - CFFI abre y cierra un receptor RAOP real.
 - XML conserva IDs, direcciones y `delay_ms` firmado.
 - Un grupo retiene con delay positivo, adelanta con negativo y satura la mezcla.
-- El build Docker ejecuta los tests Python y carga la extensión nativa.
+- El build Docker ejecuta los tests Python, carga la extensión nativa y sirve
+  la UI; un guardado de UI persiste el XML y reinicia el bridge.

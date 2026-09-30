@@ -27,6 +27,7 @@ from .airplay import Advertiser, lan_ipv4, virtual_mac
 from .audio import CHUNK_FRAMES, CHUNK_MS, CHUNK_SAMPLES, GroupBuffer, chunk, mixed_bytes
 from .raop import FLUSH, PLAY, STOP, VOLUME, Receiver
 from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker
+from .web import ConfigWeb
 
 LOG = logging.getLogger(__name__)
 AIRPLAY_FORMAT = AudioFormat(sample_rate=44_100, bit_depth=16, channels=2)
@@ -39,6 +40,8 @@ class Config:
     config_path: str = "config.xml"
     server_port: int = 8927
     server_name: str = "AirPlay Sendspin"
+    web_host: str = "0.0.0.0"
+    web_port: int = 8080
 
 
 class AirPlayInput:
@@ -243,10 +246,14 @@ class Manager:
     def __init__(self, config: Config) -> None:
         if config.port_range < 3:
             raise ValueError("AirPlay port range must contain at least three ports")
+        if not 1 <= config.web_port <= 65535:
+            raise ValueError("web port must be in 1..65535")
         self.config = config
         self.registry = Registry.load(config.config_path, config.port_base, config.port_range)
         self.address = ""
         self.server: SendspinServer | None = None
+        self.web: ConfigWeb | None = None
+        self.restart_requested = asyncio.Event()
         self.targets: dict[str, Target] = {}
         self.group_targets: dict[str, GroupTarget] = {}
         self.member_groups: dict[str, list[GroupTarget]] = {}
@@ -273,6 +280,21 @@ class Manager:
             advertise_addresses=[self.address],
             discover_clients=True,
         )
+        self.web = ConfigWeb(
+            config_path=self.config.config_path,
+            port_base=self.config.port_base,
+            port_range=self.config.port_range,
+            host=self.config.web_host,
+            port=self.config.web_port,
+            advertised_host=self.address,
+            registry=lambda: self.registry,
+            speaker_state=self.speaker_state,
+            set_speaker_volume=self.set_speaker_volume,
+            replace_registry=self.replace_registry,
+            restart=self.request_restart,
+        )
+        await self.web.start()
+        LOG.info("Configuration UI: %s", self.web.url)
         for group in self.registry.groups():
             target = GroupTarget(self, group)
             await target.start()
@@ -292,6 +314,9 @@ class Manager:
         LOG.info("Sendspin server listening on %s:%d", self.address, self.config.server_port)
 
     async def close(self) -> None:
+        if self.web is not None:
+            await self.web.close()
+            self.web = None
         if self.audio_task is not None:
             self.audio_task.cancel()
             await asyncio.gather(self.audio_task, return_exceptions=True)
@@ -308,6 +333,24 @@ class Manager:
         if self.server is not None:
             await self.server.close()
             self.server = None
+
+    def replace_registry(self, registry: Registry) -> None:
+        self.registry = registry
+
+    def speaker_state(self, speaker_id: str) -> dict:
+        target = self.targets.get(speaker_id)
+        return {"connected": target is not None and target.player is not None, "volume": target.volume if target is not None else 100}
+
+    def set_speaker_volume(self, speaker_id: str, volume: int) -> int | None:
+        target = self.targets.get(speaker_id)
+        if target is None or target.player is None:
+            return None
+        target.set_volume(volume)
+        return target.volume
+
+    def request_restart(self) -> None:
+        LOG.info("Restarting bridge to apply configuration changes")
+        self.restart_requested.set()
 
     def set_group_volume(self, speaker_ids: list[str], volume: int) -> None:
         targets = [self.targets[speaker_id] for speaker_id in speaker_ids if speaker_id in self.targets and self.targets[speaker_id].player]
