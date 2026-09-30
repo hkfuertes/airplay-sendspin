@@ -76,4 +76,8 @@ func TestGroupDelaysMemberBySamples(t *testing.T) {
 	if got := m.delay.Load(); got != 1920 {
 		t.Fatalf("SetDelay(20ms) = %d samples, want 1920", got)
 	}
+	m.SetDelay(-20 * time.Millisecond)
+	if got := m.delay.Load(); got != -1920 {
+		t.Fatalf("SetDelay(-20ms) = %d samples, want -1920", got)
+	}
 }

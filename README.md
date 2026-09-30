@@ -5,14 +5,19 @@ discovered speaker gets its own target; set `hidden="true"` to reserve it for
 groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
 it directly to that speaker's Sendspin session.
 
+## Docker / homelab
+
 ```sh
 git clone https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
-docker compose up -d --build
+docker build --target runtime -t airplay-sendspin:latest .
+docker compose up -d
 # The image build runs vet and all Go tests.
 ```
 
-### Home Assistant add-on
+Host networking is required for mDNS and AirPlay discovery.
+
+## Home Assistant add-on
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
 then install **AirPlay Sendspin**. Bump `airplay-sendspin/config.yaml`'s
@@ -63,8 +68,10 @@ libraop before building the bridge binary; no vendor source is checked in.
 - `hidden="true"` stops advertising the speaker's own AirPlay target. It still
   plays its groups; outside any group the bridge leaves the player alone (no
   Sendspin session), so another server can use it.
-- `delay_ms` holds back only that speaker's group audio (0–500 ms). The first
-  hello writes `delay_ms="0"`; after that the XML value is authoritative.
+- `delay_ms` offsets only that speaker's group audio (−500–500 ms): positive
+  holds it back and negative advances it. It works for both `inbound` and
+  `outbound` speakers. The first hello writes `delay_ms="0"`; after that the
+  XML value is authoritative.
 - Each `<group>` is written by hand and is advertised as its own AirPlay target
   (`port` is filled in if missing). It plays in sync on every member `speaker
   id`, at 48 kHz/16-bit. Visible members stay advertised on their own; hidden

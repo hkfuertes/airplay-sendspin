@@ -595,8 +595,8 @@ func (t *target) onClientHello(hello protocol.ClientHello) error {
 		}
 	}
 	t.setClientID(hello.ClientID)
-	if delay > 0 && t.pipeline.Grouped() {
-		log.Printf("Sendspin player %q: group audio held back %v (delay_ms)", t.speaker.ID, delay)
+	if delay != 0 && t.pipeline.Grouped() {
+		log.Printf("Sendspin player %q: group audio offset %v (delay_ms)", t.speaker.ID, delay)
 	}
 	t.pipeline.SetDelay(delay)
 	return nil
