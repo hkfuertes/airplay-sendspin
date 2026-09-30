@@ -5,14 +5,19 @@ discovered speaker gets its own target; set `hidden="true"` to reserve it for
 groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
 it directly to that speaker's Sendspin session.
 
+## Docker / homelab
+
 ```sh
 git clone https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
-docker compose up -d --build
+docker build --target runtime -t airplay-sendspin:latest .
+docker compose up -d
 # The image build runs vet and all Go tests.
 ```
 
-### Home Assistant add-on
+Host networking is required for mDNS and AirPlay discovery.
+
+## Home Assistant add-on
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
 then install **AirPlay Sendspin**. Bump `airplay-sendspin/config.yaml`'s
