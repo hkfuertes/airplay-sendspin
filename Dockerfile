@@ -1,3 +1,12 @@
+FROM node:22-bookworm-slim AS web-build
+
+WORKDIR /web
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.13-bookworm AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +38,7 @@ RUN set -eux; \
 
 COPY pyproject.toml setup.py build_raop.py ./
 COPY src ./src
+COPY --from=web-build /out ./src/airplay_sendspin/web
 COPY tests ./tests
 RUN LIBRAOP_ROOT=/src/third_party/libraop python -m pip install --no-cache-dir --prefix=/install . \
  && PYTHONPATH=/src/src:/install/lib/python3.13/site-packages python -m unittest discover -s tests -v \

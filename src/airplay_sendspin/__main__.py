@@ -17,34 +17,53 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-config", default="config.xml", help="persistent speaker registry")
     result.add_argument("-server-port", type=int, default=8927, help="inbound Sendspin server port")
     result.add_argument("-server-name", default="AirPlay Sendspin", help="inbound Sendspin server name")
+    result.add_argument("-web-host", default="0.0.0.0", help="configuration UI listen address")
+    result.add_argument("-web-port", type=int, default=8080, help="configuration UI port")
     return result
 
 
-async def run(args: argparse.Namespace) -> None:
-    manager = Manager(
-        Config(
-            port_base=args.port_base,
-            port_range=args.port_range,
-            config_path=args.config,
-            server_port=args.server_port,
-            server_name=args.server_name,
-        )
+def manager_config(args: argparse.Namespace) -> Config:
+    return Config(
+        port_base=args.port_base,
+        port_range=args.port_range,
+        config_path=args.config,
+        server_port=args.server_port,
+        server_name=args.server_name,
+        web_host=args.web_host,
+        web_port=args.web_port,
     )
+
+
+async def run(args: argparse.Namespace) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stop.set)
-    try:
-        await manager.start()
-        await stop.wait()
-    finally:
-        await manager.close()
+
+    while not stop.is_set():
+        manager = Manager(manager_config(args))
+        waiters: list[asyncio.Task[bool]] = []
+        restart = False
+        try:
+            await manager.start()
+            waiters = [
+                asyncio.create_task(stop.wait()),
+                asyncio.create_task(manager.restart_requested.wait()),
+            ]
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            restart = manager.restart_requested.is_set() and not stop.is_set()
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+            await manager.close()
+        if restart:
+            logging.getLogger(__name__).info("Bridge restarted with updated configuration")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    args = parser().parse_args()
-    asyncio.run(run(args))
+    asyncio.run(run(parser().parse_args()))
 
 
 if __name__ == "__main__":

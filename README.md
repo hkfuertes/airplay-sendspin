@@ -17,6 +17,17 @@ docker compose up -d
 
 Host networking is required for mDNS and AirPlay discovery.
 
+## Visual configuration
+
+The bridge starts an authenticated editor on port `8080`. Its startup log prints
+one URL such as `http://192.168.1.10:8080/?token=…`; open that URL to edit
+speakers, groups, visibility, endpoints, and signed group offsets. The token is
+persisted as `.config-web-token` next to `config.xml`; keep it private.
+
+Saving validates and atomically writes `config.xml`, then restarts the bridge
+so the new configuration takes effect. Active playback stops during that brief
+restart. Use `-web-host` and `-web-port` to change the listener.
+
 ## Home Assistant add-on
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
@@ -31,8 +42,8 @@ them.
 ## `state/config.xml`
 
 The bridge creates and atomically updates this file as speakers appear. It is
-runtime state and intentionally ignored by Git; restart the bridge after a
-manual edit.
+runtime state and intentionally ignored by Git. Prefer the visual editor; a
+manual edit requires a bridge restart.
 
 `dependencies.lock` pins libraop. Docker clones and patches it, then links its
 PCM receiver into the Python CFFI extension. Sendspin uses the official
