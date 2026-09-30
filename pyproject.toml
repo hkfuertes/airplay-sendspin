@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "cffi>=1.17"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airplay-sendspin"
+version = "0.2.0.dev0"
+description = "AirPlay 1 targets for Sendspin speakers"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosendspin[asrc,server]==9.1.1",
+  "cffi>=1.17",
+]
+
+[project.scripts]
+airplay-sendspin = "airplay_sendspin.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+airplay_sendspin = ["_raop.*"]

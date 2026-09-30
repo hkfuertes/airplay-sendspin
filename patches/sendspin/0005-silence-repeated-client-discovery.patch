@@ -1,7 +1,0 @@
-diff --git a/pkg/discovery/mdns.go b/pkg/discovery/mdns.go
-index ec7126d..9cca234 100644
---- a/pkg/discovery/mdns.go
-+++ b/pkg/discovery/mdns.go
-@@ -232,2 +231,0 @@ func (m *Manager) browseClientsLoop() {
--				log.Printf("Discovered client: %s at %s:%d%s",
--					info.Name, info.Host, info.Port, info.Path)

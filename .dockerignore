@@ -5,3 +5,6 @@ coverage
 config.xml
 state
 third_party/
+__pycache__/
+**/__pycache__/
+*.py[cod]

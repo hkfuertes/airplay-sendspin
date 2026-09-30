@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from airplay_sendspin.registry import Endpoint, Registry
+
+
+class RegistryTests(unittest.TestCase):
+    def test_outbound_is_persisted_once_and_gets_a_port(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.xml"
+            registry = Registry.load(path)
+            speaker, added = registry.upsert_outbound(
+                "Kitchen", Endpoint(instance="kitchen._sendspin._tcp.local.", host="192.0.2.10", port=8928)
+            )
+            self.assertTrue(added)
+            self.assertEqual((speaker.id, speaker.port, speaker.endpoint.path), ("kitchen", 7000, "/sendspin"))
+            again, added = registry.upsert_outbound(
+                "Renamed", Endpoint(instance="kitchen._sendspin._tcp.local.", host="192.0.2.11", port=8928)
+            )
+            self.assertFalse(added)
+            self.assertEqual(again.id, "kitchen")
+            self.assertEqual(again.endpoint.host, "192.0.2.11")
+            self.assertIn('airplay_suffix=" (Sendspin)"', path.read_text())
+
+    def test_signed_delay_is_inclusive(self) -> None:
+        template = """<airplay-sendspin version=\"1\"><speakers><speaker id=\"kitchen\" direction=\"inbound\" delay_ms=\"{delay}\"><endpoint/></speaker></speakers><groups/></airplay-sendspin>"""
+        for delay in (-500, 500):
+            with self.subTest(delay=delay), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.xml"
+                path.write_text(template.format(delay=delay))
+                self.assertEqual(Registry.load(path).speaker("kitchen").delay_ms, delay)
+        for delay in (-501, 501):
+            with self.subTest(delay=delay), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.xml"
+                path.write_text(template.format(delay=delay))
+                with self.assertRaisesRegex(ValueError, "delay_ms"):
+                    Registry.load(path)
+
+    def test_inbound_client_cannot_claim_an_outbound_speaker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            registry = Registry.load(Path(directory) / "config.xml")
+            speaker, _ = registry.upsert_outbound("Kitchen", Endpoint(host="192.0.2.10", port=8928))
+            registry.set_client_id(speaker.id, "client-a")
+            with self.assertRaisesRegex(ValueError, "outbound"):
+                registry.upsert_inbound("client-a", "Kitchen")
+
+
+if __name__ == "__main__":
+    unittest.main()

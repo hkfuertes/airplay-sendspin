@@ -12,7 +12,7 @@ git clone https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
 docker build --target runtime -t airplay-sendspin:latest .
 docker compose up -d
-# The image build runs vet and all Go tests.
+# The image build compiles the libraop CFFI extension and runs Python tests.
 ```
 
 Host networking is required for mDNS and AirPlay discovery.
@@ -26,8 +26,7 @@ images; the workflow builds one architecture at a time. Home Assistant pulls
 the image tag with that version. As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
-them. GitHub Releases are published manually and include Linux amd64 and arm64
-binary tarballs.
+them.
 
 ## `state/config.xml`
 
@@ -35,9 +34,10 @@ The bridge creates and atomically updates this file as speakers appear. It is
 runtime state and intentionally ignored by Git; restart the bridge after a
 manual edit.
 
-`dependencies.lock` pins the upstream commits. Docker clones them, applies the
-ordered patches in `patches/libraop/` and `patches/sendspin/`, then rebuilds
-libraop before building the bridge binary; no vendor source is checked in.
+`dependencies.lock` pins libraop. Docker clones and patches it, then links its
+PCM receiver into the Python CFFI extension. Sendspin uses the official
+[`aiosendspin`](https://github.com/Sendspin/aiosendspin) package; no vendor
+source is checked in.
 
 ```xml
 <airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
@@ -74,11 +74,12 @@ libraop before building the bridge binary; no vendor source is checked in.
   XML value is authoritative.
 - Each `<group>` is written by hand and is advertised as its own AirPlay target
   (`port` is filled in if missing). It plays in sync on every member `speaker
-  id`, at 48 kHz/16-bit. Visible members stay advertised on their own; hidden
-  members are not advertised but remain connected to feed their groups. If a
-  speaker's own target and one of its groups play at once, the speaker mixes
-  both. Group volume moves the members' average and keeps their differences (as
-  in aiosendspin); at 0 or 100 every member ends up equal.
+  id`. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
+  member the same Sendspin timestamp. Visible members stay advertised on their
+  own; hidden members are not advertised but remain connected to feed groups.
+  If a speaker's own target and one of its groups play at once, the speaker
+  mixes both. Group volume moves the members' average and keeps their
+  differences; at 0 or 100 every member ends up equal.
 
 ## AI-assisted development
 
@@ -91,8 +92,9 @@ merging and remain responsible for releases, security, and support.
 
 - [libraop](https://github.com/philippe44/libraop) (AirCast/RAOP), by
   Philippe44, provides the AirPlay receiver and PCM decoding foundation.
-- [sendspin-go](https://github.com/Sendspin/sendspin-go) provides the Sendspin
-  protocol implementation, sessions, and discovery support.
-- [HashiCorp mDNS](https://github.com/hashicorp/mdns) provides local multicast
-  DNS advertisement and discovery.
+- [aiosendspin](https://github.com/Sendspin/aiosendspin) provides the official
+  Python Sendspin protocol implementation, sessions, audio conversion, and
+  discovery.
+- [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf)
+  provides local multicast DNS advertisement for AirPlay.
 - [Home Assistant](https://www.home-assistant.io/) provides the add-on platform.

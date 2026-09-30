@@ -1,0 +1,446 @@
+"""Async AirPlay targets backed by the official Sendspin server."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import math
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import numpy as np
+from aiosendspin.noise.keys import Identity, b64url_decode
+from aiosendspin.noise.trust_store import FileServerPairingStore
+from aiosendspin.server import (
+    AudioFormat,
+    ClientAddedEvent,
+    ClientConnectedEvent,
+    ClientDisconnectedEvent,
+    ClientUpdatedEvent,
+    SendspinServer,
+    VolumeChangedEvent,
+)
+
+from .airplay import Advertiser, lan_ipv4, virtual_mac
+from .audio import CHUNK_FRAMES, CHUNK_MS, CHUNK_SAMPLES, GroupBuffer, chunk, mixed_bytes
+from .raop import FLUSH, PLAY, STOP, VOLUME, Receiver
+from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker
+
+LOG = logging.getLogger(__name__)
+AIRPLAY_FORMAT = AudioFormat(sample_rate=44_100, bit_depth=16, channels=2)
+
+
+@dataclass(frozen=True)
+class Config:
+    port_base: int = 7000
+    port_range: int = 10
+    config_path: str = "config.xml"
+    server_port: int = 8927
+    server_name: str = "AirPlay Sendspin"
+
+
+class AirPlayInput:
+    """A libraop receiver plus its `_raop._tcp` advertisement."""
+
+    def __init__(self, manager: Manager, key: str, name: str, port: int) -> None:
+        self.manager = manager
+        self.key = key
+        self.name = name
+        self.port_base = port
+        self.receiver: Receiver | None = None
+        self.advertiser: Advertiser | None = None
+
+    async def start(self) -> None:
+        mac = virtual_mac(self.key)
+        self.receiver = Receiver(
+            self.name + self.manager.registry.airplay_suffix,
+            mac,
+            self.manager.address,
+            self.port_base,
+            self.manager.config.port_range,
+        )
+        try:
+            self.advertiser = Advertiser(
+                self.name + self.manager.registry.airplay_suffix,
+                mac,
+                self.manager.address,
+                self.receiver.port,
+            )
+            await self.advertiser.start()
+        except BaseException:
+            if self.advertiser is not None:
+                await self.advertiser.close()
+                self.advertiser = None
+            self.receiver.close()
+            self.receiver = None
+            raise
+
+    def read_pcm(self, frames: int = CHUNK_FRAMES) -> bytes:
+        return self.receiver.read_pcm(frames) if self.receiver is not None else b""
+
+    def events(self):
+        if self.receiver is None:
+            return
+        while event := self.receiver.read_event():
+            yield event
+
+    async def close(self) -> None:
+        if self.advertiser is not None:
+            await self.advertiser.close()
+            self.advertiser = None
+        if self.receiver is not None:
+            self.receiver.close()
+            self.receiver = None
+
+
+class GroupTarget:
+    """One configured group AirPlay input, cached once for every member."""
+
+    def __init__(self, manager: Manager, group: Group) -> None:
+        self.manager = manager
+        self.group = group
+        self.input = AirPlayInput(manager, f"group:{group.id}", group.airplay_name, group.port)
+        self.buffer = GroupBuffer(self.input.read_pcm)
+        self.active = False
+
+    async def start(self) -> None:
+        await self.input.start()
+        LOG.info("AirPlay group %r (%s) -> %d speakers", self.group.airplay_name, self.group.id, len(self.group.speaker_ids))
+
+    def handle_events(self) -> None:
+        for event, volume in self.input.events() or ():
+            if event == PLAY:
+                self.active = True
+                self.buffer.reset()
+            elif event == FLUSH:
+                self.buffer.reset()
+            elif event == STOP:
+                self.active = False
+                self.buffer.reset()
+            elif event == VOLUME:
+                self.manager.set_group_volume(self.group.speaker_ids, _volume_percent(volume))
+
+    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int) -> None:
+        if self.active:
+            self.buffer.mix_into(output, playback_chunk, delay_ms)
+
+    async def close(self) -> None:
+        await self.input.close()
+
+
+class Target:
+    """One player, its individual AirPlay input, and its Sendspin PushStream."""
+
+    def __init__(self, manager: Manager, speaker: Speaker, groups: list[GroupTarget]) -> None:
+        self.manager = manager
+        self.speaker = speaker
+        self.groups = groups
+        self.input = None if speaker.hidden else AirPlayInput(manager, speaker.id, speaker.airplay_name, speaker.port)
+        self.player = None
+        self.stream = None
+        self.playing = False
+        self.delay_ms = speaker.delay_ms or 0
+        self.volume = 100
+        self.remove_player_listener = None
+
+    async def start(self) -> None:
+        if self.input is not None:
+            await self.input.start()
+        LOG.info("AirPlay target %r (%s)", self.speaker.airplay_name, self.speaker.id)
+
+    async def attach(self, player) -> None:
+        if self.player is player:
+            return
+        self._remove_player_listener()
+        self.player = player
+        self.remove_player_listener = player.add_event_listener(self._on_player_event)
+        self.manager.registry.set_client_id(self.speaker.id, player.client_id)
+        self.delay_ms = self.manager.registry.delay(self.speaker.id)
+        LOG.info("Sendspin player %r attached to %s", player.name, self.speaker.id)
+
+    def detach(self, client_id: str) -> None:
+        if self.player is None or self.player.client_id != client_id:
+            return
+        self._stop_stream()
+        self._remove_player_listener()
+        self.player = None
+
+    def handle_events(self) -> None:
+        if self.input is None:
+            return
+        for event, volume in self.input.events() or ():
+            if event == PLAY:
+                self.playing = True
+            elif event == FLUSH:
+                if self.stream is not None:
+                    self.stream.clear()
+            elif event == STOP:
+                self.playing = False
+                self._stop_stream()
+            elif event == VOLUME:
+                self.set_volume(_volume_percent(volume))
+
+    @property
+    def active(self) -> bool:
+        return self.playing or any(group.active for group in self.groups)
+
+    def render(self, playback_chunk: int) -> bytes:
+        output = np.zeros(CHUNK_SAMPLES, dtype=np.int32)
+        if self.playing and self.input is not None:
+            output += chunk(self.input.read_pcm())
+        for group in self.groups:
+            group.mix_into(output, playback_chunk, self.delay_ms)
+        return mixed_bytes(output)
+
+    async def push(self, pcm: bytes, play_start_us: int) -> None:
+        if self.player is None or not self.active:
+            self._stop_stream()
+            return
+        if self.stream is None or self.stream.is_stopped:
+            self.stream = self.player.group.start_stream()
+            self.stream.set_live_source(True)
+        try:
+            self.stream.prepare_audio(pcm, AIRPLAY_FORMAT)
+            await self.stream.commit_audio(play_start_us=play_start_us)
+        except Exception:
+            LOG.exception("Sendspin output for %s failed", self.speaker.id)
+            self._stop_stream()
+
+    def set_volume(self, volume: int) -> None:
+        self.volume = max(0, min(100, volume))
+        if self.player is None:
+            return
+        role = self.player.group.group_role("player")
+        if role is not None:
+            role.set_volume(self.volume)
+
+    async def close(self) -> None:
+        self._stop_stream()
+        self._remove_player_listener()
+        if self.input is not None:
+            await self.input.close()
+
+    def _stop_stream(self) -> None:
+        if self.stream is not None:
+            self.stream.stop()
+            self.stream = None
+
+    def _remove_player_listener(self) -> None:
+        if self.remove_player_listener is not None:
+            self.remove_player_listener()
+            self.remove_player_listener = None
+
+    def _on_player_event(self, _player, event) -> None:
+        if isinstance(event, VolumeChangedEvent):
+            self.volume = event.volume
+
+
+class Manager:
+    """Owns one Sendspin server, all RAOP inputs, and the shared 20 ms grid."""
+
+    def __init__(self, config: Config) -> None:
+        if config.port_range < 3:
+            raise ValueError("AirPlay port range must contain at least three ports")
+        self.config = config
+        self.registry = Registry.load(config.config_path, config.port_base, config.port_range)
+        self.address = ""
+        self.server: SendspinServer | None = None
+        self.targets: dict[str, Target] = {}
+        self.group_targets: dict[str, GroupTarget] = {}
+        self.member_groups: dict[str, list[GroupTarget]] = {}
+        self.remove_server_listener = None
+        self.audio_task: asyncio.Task[None] | None = None
+        self.playback_chunk = 0
+        self.next_play_start_us: int | None = None
+
+    async def start(self) -> None:
+        self.address = lan_ipv4()
+        state_dir = Path(self.config.config_path).parent
+        identity = _load_identity(state_dir / ".sendspin-identity")
+        pairing_store = await FileServerPairingStore.open(state_dir / ".sendspin-pairings.json")
+        self.server = SendspinServer(
+            asyncio.get_running_loop(),
+            identity,
+            self.config.server_name,
+            pairing_store=pairing_store,
+            allow_unencrypted=True,
+        )
+        self.remove_server_listener = self.server.add_event_listener(self._on_server_event)
+        await self.server.start_server(
+            port=self.config.server_port,
+            advertise_addresses=[self.address],
+            discover_clients=True,
+        )
+        for group in self.registry.groups():
+            target = GroupTarget(self, group)
+            await target.start()
+            self.group_targets[group.id] = target
+            for speaker_id in group.speaker_ids:
+                self.member_groups.setdefault(speaker_id, []).append(target)
+        for speaker in self.registry.speakers():
+            if speaker.direction == INBOUND or (speaker.endpoint.host and speaker.endpoint.port):
+                await self._ensure_target(speaker)
+            if speaker.direction == OUTBOUND and speaker.endpoint.host and speaker.endpoint.port:
+                self.server.connect_to_client(
+                    speaker.endpoint.url,
+                    retry_initial_connection=True,
+                    retry_indefinitely=True,
+                )
+        self.audio_task = asyncio.create_task(self._pump_audio(), name="airplay-sendspin-audio")
+        LOG.info("Sendspin server listening on %s:%d", self.address, self.config.server_port)
+
+    async def close(self) -> None:
+        if self.audio_task is not None:
+            self.audio_task.cancel()
+            await asyncio.gather(self.audio_task, return_exceptions=True)
+            self.audio_task = None
+        if self.remove_server_listener is not None:
+            self.remove_server_listener()
+            self.remove_server_listener = None
+        for target in list(self.targets.values()):
+            await target.close()
+        self.targets.clear()
+        for target in self.group_targets.values():
+            await target.close()
+        self.group_targets.clear()
+        if self.server is not None:
+            await self.server.close()
+            self.server = None
+
+    def set_group_volume(self, speaker_ids: list[str], volume: int) -> None:
+        targets = [self.targets[speaker_id] for speaker_id in speaker_ids if speaker_id in self.targets and self.targets[speaker_id].player]
+        levels = [float(target.volume) for target in targets]
+        _spread_volume(levels, float(volume))
+        for target, level in zip(targets, levels, strict=True):
+            target.set_volume(round(level))
+
+    def _on_server_event(self, _server: SendspinServer, event) -> None:
+        if isinstance(event, (ClientAddedEvent, ClientConnectedEvent, ClientUpdatedEvent)):
+            asyncio.create_task(self._attach_client(event.client_id))
+        elif isinstance(event, ClientDisconnectedEvent):
+            target = next((target for target in self.targets.values() if target.player and target.player.client_id == event.client_id), None)
+            if target is not None:
+                target.detach(event.client_id)
+
+    async def _attach_client(self, client_id: str) -> None:
+        if self.server is None:
+            return
+        player = self.server.get_client(client_id)
+        if player is None or not player.roles_by_family("player"):
+            return
+        speaker = self.registry.speaker_for_client(client_id)
+        if speaker is None:
+            endpoint = self._outbound_endpoint(client_id)
+            if endpoint is not None:
+                speaker, added = self.registry.upsert_outbound(player.name, endpoint)
+                if added:
+                    LOG.info("Recorded discovered Sendspin player %r as %r", player.name, speaker.id)
+            else:
+                speaker, added = self.registry.upsert_inbound(client_id, player.name)
+                if added:
+                    LOG.info("Recorded inbound Sendspin player %r as %r", player.name, speaker.id)
+        target = await self._ensure_target(speaker)
+        await target.attach(player)
+
+    async def _ensure_target(self, speaker: Speaker) -> Target:
+        target = self.targets.get(speaker.id)
+        if target is not None:
+            return target
+        target = Target(self, speaker, self.member_groups.get(speaker.id, []))
+        self.targets[speaker.id] = target
+        try:
+            await target.start()
+        except BaseException:
+            self.targets.pop(speaker.id, None)
+            await target.close()
+            raise
+        return target
+
+    async def _pump_audio(self) -> None:
+        loop = asyncio.get_running_loop()
+        next_tick = loop.time()
+        try:
+            while True:
+                for target in self.group_targets.values():
+                    target.handle_events()
+                for target in self.targets.values():
+                    target.handle_events()
+                active = [target for target in self.targets.values() if target.player is not None and target.active]
+                if not active:
+                    self.next_play_start_us = None
+                    next_tick = loop.time()
+                    await asyncio.sleep(0.01)
+                    continue
+                assert self.server is not None
+                now = self.server.clock.now_us()
+                if self.next_play_start_us is None or self.next_play_start_us < now + 250_000:
+                    self.next_play_start_us = now + 500_000
+                play_start_us = self.next_play_start_us
+                self.next_play_start_us += CHUNK_MS * 1_000
+                payloads = [(target, target.render(self.playback_chunk)) for target in active]
+                await asyncio.gather(*(target.push(pcm, play_start_us) for target, pcm in payloads))
+                self.playback_chunk += 1
+                next_tick += CHUNK_MS / 1_000
+                await asyncio.sleep(max(0, next_tick - loop.time()))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("audio scheduler stopped")
+            raise
+
+    def _outbound_endpoint(self, client_id: str) -> Endpoint | None:
+        if self.server is None:
+            return None
+        # ponytail: aiosendspin has no public outbound-peer URL; use its map until it exposes one.
+        url = getattr(self.server, "_client_urls", {}).get(client_id)
+        if not url:
+            return None
+        parts = urlsplit(url)
+        return Endpoint(host=parts.hostname or "", port=parts.port or 0, path=parts.path).normalized()
+
+
+def _volume_percent(volume: float) -> int:
+    if math.isnan(volume) or volume <= 0:
+        return 0
+    return 100 if volume >= 1 else int(volume * 100 + 0.5)
+
+
+def _spread_volume(levels: list[float], target: float) -> None:
+    if not levels:
+        return
+    delta = target - sum(levels) / len(levels)
+    active = list(range(len(levels)))
+    while active:
+        lost = 0.0
+        next_active: list[int] = []
+        for index in active:
+            level = levels[index] + delta
+            if level > 100:
+                lost += level - 100
+                levels[index] = 100
+            elif level < 0:
+                lost += level
+                levels[index] = 0
+            else:
+                levels[index] = level
+                next_active.append(index)
+        if len(next_active) == len(active) or not next_active:
+            return
+        delta = lost / len(next_active)
+        active = next_active
+
+
+def _load_identity(path: Path) -> Identity:
+    try:
+        raw = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        identity = Identity.generate()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(path.suffix + ".tmp")
+        temp.write_text(identity.private_b64u + "\n", encoding="ascii")
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+        return identity
+    return Identity.from_private_bytes(b64url_decode(raw))
