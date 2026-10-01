@@ -51,6 +51,7 @@ FROM python:3.13-slim-bookworm AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libatomic1 \
     libstdc++6 \
+    libtiff6 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /install /usr/local
