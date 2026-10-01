@@ -39,6 +39,21 @@ class ConfigPayloadTests(unittest.TestCase):
             self.assertEqual(restored_payload["groups"][0]["exposed_name"], "Home")
             self.assertEqual(restored_payload["groups"][0]["speaker_ids"], ["kitchen"])
 
+    def test_removing_a_speaker_preserves_other_group_members(self) -> None:
+        payload = {
+            "speakers": [{"id": "kitchen"}, {"id": "bedroom"}],
+            "groups": [{"id": "home", "speaker_ids": ["kitchen", "bedroom"]}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.xml"
+            registry_from_payload(payload, str(path), 7000, 10).save()
+            payload["speakers"] = payload["speakers"][1:]
+            payload["groups"][0]["speaker_ids"].remove("kitchen")
+            registry_from_payload(payload, str(path), 7000, 10).save()
+            restored = Registry.load(path)
+            self.assertIsNone(restored.speaker("kitchen"))
+            self.assertEqual(restored.groups()[0].speaker_ids, ["bedroom"])
+
     def test_payload_rejects_invalid_exposure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "exposed must be true or false"):
