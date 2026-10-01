@@ -8,8 +8,8 @@ it directly to that speaker's Sendspin session.
 ## Docker / homelab
 
 ```sh
-git clone https://github.com/hkfuertes/airplay-sendspin.git
-cd airplay-sendspin
+git clone https://github.com/hkfuertes/sendspin-bridge.git
+cd sendspin-bridge
 docker build --target runtime -t sendspin-bridge:latest .
 docker compose up -d
 # The image build compiles the libraop CFFI extension and runs Python tests.
@@ -40,8 +40,7 @@ the image tag with that version. As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
 them. The add-on slug and folder remain `airplay_sendspin`. Fresh `config.xml` files
-use the `<sendspin-bridge>` root. The GitHub URL still uses the current
-repository name.
+use the `<sendspin-bridge>` root.
 
 ## `state/config.xml`
 
