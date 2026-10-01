@@ -18,8 +18,12 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 }
 
-.page-shell { max-width: 1040px; margin: auto; padding: 0 24px 100px; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; border-bottom: 1px solid var(--border); }
+.page-shell { max-width: 1040px; margin: auto; padding: 0 24px 40px; }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 8px 0; border-bottom: 1px solid var(--border); background: #0e1921; }
+.header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.header-message { max-width: 210px; margin: 0; color: var(--accent); font-size: 12px; }
+.header-message:empty { display: none; }
+.save-warning { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 750; letter-spacing: -.035em; white-space: nowrap; }
 .brand-light { color: var(--muted); font-weight: 450; }
 .brand-mark { display: flex; align-items: center; justify-content: center; gap: 3px; width: 30px; height: 30px; border: 1px solid #5c9685; border-radius: 8px; background: #173832; }
@@ -35,12 +39,7 @@
 .button-primary { background: var(--accent); color: #102923; }
 .button-primary:hover:not(:disabled) { background: #c3f8dc; }
 
-h1, h2, p { margin-top: 0; }
-.page-heading { padding: 27px 0 20px; }
-h1 { margin-bottom: 4px; font-size: 27px; line-height: 1.2; letter-spacing: -.04em; }
-.page-heading p { margin-bottom: 0; color: var(--muted); font-size: 13px; }
-.overview { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 9px; background: #16262e; color: var(--muted); font-size: 13px; }
-.overview strong { margin-right: 3px; color: var(--ink); }
+h2, p { margin-top: 0; }
 .collection { margin-top: 28px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 h2 { margin-bottom: 2px; font-size: 19px; letter-spacing: -.03em; }
@@ -101,17 +100,13 @@ h2 span { margin-left: 3px; color: var(--muted); font-size: 14px; font-weight: 5
 .settings-summary strong { font-size: 13px; }
 .empty-state { padding: 17px; border: 1px dashed #52636c; border-radius: 9px; color: var(--muted); font-size: 13px; }
 .empty-state p { margin-bottom: 12px; }
-.save-bar { position: sticky; z-index: 2; bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 30px; padding: 11px 15px; border: 1px solid #597369; border-radius: 9px; background: #1b3231; box-shadow: 0 10px 30px #050d12a8; }
-.save-copy { color: #bcd4cb; font-size: 12px; }
-.save-actions { display: flex; align-items: center; gap: 12px; }
-.save-message { max-width: 260px; margin: 0; color: #d7f2df; font-size: 12px; }
-
 @media (max-width: 640px) {
-  .page-shell { padding: 0 14px 85px; }
-  .topbar { min-height: 58px; }
-  .page-heading { padding: 20px 0 16px; }
-  h1 { font-size: 24px; }
-  .overview { gap: 8px 16px; font-size: 12px; }
+  .page-shell { padding: 0 14px 40px; }
+  .topbar { flex-wrap: wrap; gap: 6px; }
+  .brand, .header-actions { width: 100%; }
+  .header-actions { gap: 8px; }
+  .header-message:not(:empty) { order: 1; width: 100%; max-width: none; text-align: right; }
+  .save-warning { margin-right: auto; }
   .section-heading { align-items: start; }
   .section-heading .button { margin-top: 2px; padding: 7px 9px; }
   .speaker-row { gap: 8px; }
@@ -119,9 +114,10 @@ h2 span { margin-left: 3px; color: var(--muted); font-size: 14px; font-weight: 5
   .speaker-controls { justify-content: space-between; }
   .volume-area { width: min(55%, 200px); }
   .field-grid { grid-template-columns: 1fr; }
-  .save-bar { bottom: 0; margin: 30px -14px -85px; border-radius: 9px 9px 0 0; }
-  .save-copy { max-width: 175px; }
-  .save-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+
+@media (max-width: 360px) {
+  .save-warning { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) { .toggle-track::after { transition: none; } }

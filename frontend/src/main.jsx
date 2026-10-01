@@ -102,34 +102,26 @@ function App() {
     setSaving(false);
   };
 
-  const connected = config?.speakers.filter((speaker) => speaker.connected).length ?? 0;
-  const visible = config?.speakers.filter((speaker) => !speaker.hidden).length ?? 0;
-
   return <div class="page-shell">
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"><span /><span /><span /><span /></span>
         <span>Sendspin<span class="brand-light"> Bridge</span></span>
       </div>
-      <button class="button button-quiet" type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
+      <div class="header-actions">
+        <p class="header-message" role="status" aria-live="polite">{config ? message : ""}</p>
+        <span class="save-warning" id="save-warning">Stops playback</span>
+        <button class="button button-quiet" type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
+        <button class="button button-primary" type="submit" form="config-form" disabled={!config || saving} aria-describedby="save-warning">{saving ? "Saving…" : "Save & restart"}</button>
+      </div>
     </header>
 
     <main>
-      <div class="page-heading">
-        <h1>Speakers & groups</h1>
-        <p>Manage your AirPlay destinations. Volume is live; other changes need saving.</p>
-      </div>
-
+      <h1 class="sr-only">Speakers & groups</h1>
       {!config ? <div class="empty-state" role="status">
         <p>{message || "Loading configuration…"}</p>
         {message && <button class="button button-primary" type="button" onClick={load}>Try again</button>}
-      </div> : <form onSubmit={save}>
-        <div class="overview" aria-label="Bridge overview">
-          <span><strong>{connected}/{config.speakers.length}</strong> online</span>
-          <span><strong>{visible}</strong> AirPlay destinations</span>
-          <span><strong>{config.groups.length}</strong> groups</span>
-        </div>
-
+      </div> : <form id="config-form" onSubmit={save}>
         <section class="collection" aria-labelledby="speakers-title">
           <div class="section-heading">
             <div><h2 id="speakers-title">Speakers <span>{config.speakers.length}</span></h2><p>Discovered automatically · Adjust volume directly or expand settings to edit.</p></div>
@@ -160,11 +152,6 @@ function App() {
             <div class="device-body"><Text label="Name suffix" value={config.airplay_suffix} onInput={(value) => update((copy) => { copy.airplay_suffix = value; })} /><p class="field-hint">Added to every speaker and group name. Leave blank for no suffix.</p></div>
           </details>
         </section>
-
-        <div class="save-bar">
-          <div class="save-copy">Saving restarts the bridge and stops active audio.</div>
-          <div class="save-actions"><p class="save-message" role="status" aria-live="polite">{message}</p><button class="button button-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save & restart"} <span aria-hidden="true">→</span></button></div>
-        </div>
       </form>}
     </main>
   </div>;
