@@ -15,7 +15,8 @@ const chevronClass = "size-2 shrink-0 rotate-45 border-b-2 border-r-2 border-[#a
 const emptyClass = "rounded-[9px] border border-dashed border-[#52636c] p-[17px] text-[13px] text-muted";
 
 function blankGroup() {
-  const id = `group-${crypto.randomUUID()}`;
+  // ponytail: randomUUID needs HTTPS; getRandomValues also works on HTTP LAN.
+  const id = `group-${crypto.getRandomValues(new Uint32Array(4)).join("-")}`;
   return { id, exposed_name: "New group", port: 0, speaker_ids: [] };
 }
 
