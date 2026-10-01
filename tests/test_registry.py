@@ -23,10 +23,10 @@ class RegistryTests(unittest.TestCase):
             self.assertFalse(added)
             self.assertEqual(again.id, "kitchen")
             self.assertEqual(again.endpoint.host, "192.0.2.11")
-            self.assertIn('airplay_suffix=" (Sendspin)"', path.read_text())
+            self.assertIn('exposed_suffix=" (Sendspin)"', path.read_text())
 
     def test_signed_delay_is_inclusive(self) -> None:
-        template = """<airplay-sendspin version=\"1\"><speakers><speaker id=\"kitchen\" direction=\"inbound\" delay_ms=\"{delay}\"><endpoint/></speaker></speakers><groups/></airplay-sendspin>"""
+        template = """<sendspin-bridge version=\"1\"><speakers><speaker id=\"kitchen\" direction=\"inbound\" delay_ms=\"{delay}\"><endpoint/></speaker></speakers><groups/></sendspin-bridge>"""
         for delay in (-500, 500):
             with self.subTest(delay=delay), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "config.xml"
@@ -38,6 +38,23 @@ class RegistryTests(unittest.TestCase):
                 path.write_text(template.format(delay=delay))
                 with self.assertRaisesRegex(ValueError, "delay_ms"):
                     Registry.load(path)
+
+    def test_exposure_is_persisted_and_defaults_to_true(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.xml"
+            path.write_text('<sendspin-bridge exposed_suffix=" (Bridge)"><speakers>'
+                            '<speaker id="kitchen" exposed_name="Kitchen" exposed="false"><endpoint/></speaker>'
+                            '<speaker id="bedroom"><endpoint/></speaker>'
+                            '</speakers><groups><group id="home" exposed_name="Home">'
+                            '<speaker id="kitchen"/></group></groups></sendspin-bridge>')
+            registry = Registry.load(path)
+            self.assertEqual(registry.exposed_suffix, " (Bridge)")
+            self.assertEqual((registry.speaker("kitchen").exposed_name, registry.speaker("kitchen").exposed), ("Kitchen", False))
+            self.assertTrue(registry.speaker("bedroom").exposed)
+            self.assertEqual(registry.groups()[0].exposed_name, "Home")
+            xml = path.read_text()
+            self.assertIn('exposed="false"', xml)
+            self.assertNotIn("airplay", xml.lower())
 
     def test_inbound_client_cannot_claim_an_outbound_speaker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

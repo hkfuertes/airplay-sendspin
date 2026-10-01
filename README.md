@@ -1,7 +1,7 @@
 # Sendspin Bridge
 
 AirPlay 1 targets for Sendspin speakers and groups. By default, every
-discovered speaker gets its own target; set `hidden="true"` to reserve it for
+discovered speaker gets its own target; set `exposed="false"` to reserve it for
 groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
 it directly to that speaker's Sendspin session.
 
@@ -39,9 +39,9 @@ images; the workflow builds one architecture at a time. Home Assistant pulls
 the image tag with that version. As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
-them. The add-on slug and folder remain `airplay_sendspin` for existing installs;
-`config.xml` keeps its `<airplay-sendspin>` root so existing settings load without
-migration. The GitHub URL still uses the current repository name.
+them. The add-on slug and folder remain `airplay_sendspin`. Fresh `config.xml` files
+use the `<sendspin-bridge>` root. The GitHub URL still uses the current
+repository name.
 
 ## `state/config.xml`
 
@@ -55,32 +55,33 @@ PCM receiver into the Python CFFI extension. Sendspin uses the official
 source is checked in.
 
 ```xml
-<airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
+<sendspin-bridge version="1" exposed_suffix=" (Sendspin)">
   <speakers>
     <speaker id="cocina" client_id="echo-kitchen"
-             airplay_name="Cocina" direction="outbound" port="7000"
-             hidden="false" delay_ms="0">
+             exposed_name="Cocina" direction="outbound" port="7000"
+             exposed="true" delay_ms="0">
       <endpoint instance="kitchen._sendspin._tcp.local."
                 host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
   </speakers>
   <groups>
-    <group id="casa" airplay_name="Toda la casa" port="7020">
+    <group id="casa" exposed_name="Toda la casa" port="7020">
       <speaker id="cocina"/>
       <speaker id="salon"/>
     </group>
   </groups>
-</airplay-sendspin>
+</sendspin-bridge>
 ```
 
 - `id` is a stable, human-readable config key; `client_id` is the Sendspin
-  identity, never the friendly name. `airplay_suffix` is appended to every
-  speaker and group name; use `airplay_suffix=""` to omit it.
+  identity, never the friendly name. `exposed_name` is the published name;
+  `exposed_suffix` is appended to every speaker and group name. Set it to `""`
+  to omit it.
 - `direction="outbound"`: bridge discovers and dials `_sendspin._tcp`.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.
 - Exactly one direction is allowed per speaker.
-- `hidden="true"` stops advertising the speaker's own AirPlay target. It still
+- `exposed="false"` stops advertising the speaker's own target. It still
   plays its groups; outside any group the bridge leaves the player alone (no
   Sendspin session), so another server can use it.
 - `delay_ms` offsets only that speaker's group audio (−500–500 ms): positive
@@ -91,7 +92,7 @@ source is checked in.
   (`port` is filled in if missing). It plays in sync on every member `speaker
   id`. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
   member the same Sendspin timestamp. Visible members stay advertised on their
-  own; hidden members are not advertised but remain connected to feed groups.
+  own; unexposed members are not advertised but remain connected to feed groups.
   If a speaker's own target and one of its groups play at once, the speaker
   mixes both. Group volume moves the members' average and keeps their
   differences; at 0 or 100 every member ends up equal.

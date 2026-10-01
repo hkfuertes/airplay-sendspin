@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import "./style.css";
 
 // ponytail: internal-only UI; replace this before exposing it outside the trusted LAN.
-const CONFIG_TOKEN = "airplay-sendspin";
+const CONFIG_TOKEN = "sendspin-bridge";
 const buttonClass = "inline-flex min-h-[38px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-transparent px-3.5 py-[7px] text-[13px] font-semibold";
 const primaryButton = `${buttonClass} bg-accent text-[#102923] hover:enabled:bg-[#c3f8dc]`;
 const quietButton = `${buttonClass} border-line bg-[#192a32] text-ink hover:bg-[#263941]`;
@@ -16,7 +16,7 @@ const emptyClass = "rounded-[9px] border border-dashed border-[#52636c] p-[17px]
 
 function blankGroup() {
   const id = `group-${crypto.randomUUID()}`;
-  return { id, airplay_name: "New group", port: 0, speaker_ids: [] };
+  return { id, exposed_name: "New group", port: 0, speaker_ids: [] };
 }
 
 function integers(config) {
@@ -117,7 +117,7 @@ function App() {
         <span class="flex size-[30px] items-center justify-center gap-[3px] rounded-lg border border-[#5c9685] bg-[#173832]" aria-hidden="true"><span class="h-2.5 w-[3px] rounded-full bg-accent" /><span class="h-[18px] w-[3px] rounded-full bg-accent" /><span class="h-3.5 w-[3px] rounded-full bg-accent" /><span class="h-[7px] w-[3px] rounded-full bg-accent" /></span>
         <span>Sendspin<span class="font-normal text-muted"> Bridge</span></span>
       </div>
-      <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="AirPlay name suffix" placeholder="Suffix" value={config?.airplay_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.airplay_suffix = value; }); }} />
+      <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="Exposed name suffix" placeholder="Suffix" value={config?.exposed_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.exposed_suffix = value; }); }} />
       <div class="flex flex-wrap items-center justify-end gap-2.5 max-[800px]:w-full max-[800px]:gap-2">
         <p class="m-0 max-w-[210px] text-xs text-accent empty:hidden max-[800px]:order-1 max-[800px]:w-full max-[800px]:max-w-none max-[800px]:text-right" role="status" aria-live="polite">{config ? message : ""}</p>
         <button class={quietButton} type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
@@ -143,7 +143,7 @@ function App() {
 
         <section class="mt-7" aria-labelledby="groups-title">
           <div class="mb-3 flex items-center justify-between gap-3.5 max-sm:items-start">
-            <div><h2 id="groups-title" class="mb-0.5 text-[19px] tracking-tight">Groups <span class="ml-1 text-sm font-normal text-muted">{config.groups.length}</span></h2><p class="text-xs text-muted">One AirPlay destination for multiple speakers.</p></div>
+            <div><h2 id="groups-title" class="mb-0.5 text-[19px] tracking-tight">Groups <span class="ml-1 text-sm font-normal text-muted">{config.groups.length}</span></h2><p class="text-xs text-muted">One destination for multiple speakers.</p></div>
             <button class={`${secondaryButton} max-sm:mt-0.5 max-sm:px-[9px]`} type="button" onClick={() => { const group = blankGroup(); setNewGroupId(group.id); update((copy) => copy.groups.push(group)); }}>+ Add group</button>
           </div>
           <div class="grid gap-2">
@@ -167,20 +167,20 @@ function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume }) {
     <div class="flex min-h-16 flex-wrap items-center justify-between gap-x-[18px] gap-y-3 px-[17px] py-3 max-sm:gap-y-2">
       <div class="flex min-w-[180px] flex-1 items-center gap-[15px] max-sm:w-full">
         <span class={`inline-flex min-w-16 items-center gap-1.5 text-[11px] ${connected ? "text-[#b6efd3]" : "text-muted"}`}><span class={`size-[7px] shrink-0 rounded-full ${connected ? "bg-[#82e5ae]" : "bg-[#778b8d]"}`} />{connected ? "Online" : "Offline"}</span>
-        <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{speaker.airplay_name || speaker.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{speaker.hidden ? "AirPlay hidden" : "AirPlay visible"} · {speaker.id}</small></span>
+        <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{speaker.exposed_name || speaker.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{speaker.exposed ? "Exposed" : "Not exposed"} · {speaker.id}</small></span>
       </div>
       <div class="flex items-center gap-6 max-sm:w-full max-sm:justify-between">
         <div class="w-[170px] max-sm:w-[min(55%,200px)]">
           <label class="mb-0.5 flex justify-between text-[11px] text-muted" for={volumeId}>Volume <output class="font-semibold text-ink" for={volumeId}>{volume}%</output></label>
           <input class="m-0 w-full cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-45" id={volumeId} type="range" min="0" max="100" value={volume} disabled={!connected} onInput={(event) => onPreviewVolume(Number(event.currentTarget.value))} onChange={(event) => onCommitVolume(Number(event.currentTarget.value))} />
         </div>
-        <Toggle checked={!speaker.hidden} onChange={(visible) => onChange("hidden", !visible)}>AirPlay</Toggle>
+        <Toggle checked={speaker.exposed} onChange={(exposed) => onChange("exposed", exposed)}>Exposed</Toggle>
       </div>
     </div>
     <details class="group border-t border-line">
       <summary class="flex w-fit cursor-pointer list-none items-center gap-1 px-[17px] py-[7px] text-xs text-[#bdd9cf] hover:bg-[#21333a] [&::-webkit-details-marker]:hidden">Settings <span class={`${chevronClass} ml-1 size-1.5`} aria-hidden="true" /></summary>
       <div class="grid gap-4 border-t border-line p-[17px]"><div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-        <Text label="AirPlay name" value={speaker.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
+        <Text label="Exposed name" value={speaker.exposed_name} onInput={(value) => onChange("exposed_name", value)} />
         <NumberField label="Group offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
       </div><p class="m-0 text-xs leading-normal text-muted">Group offset: −500 to 500 ms.</p></div>
     </details>
@@ -196,19 +196,19 @@ function Toggle({ checked, onChange, children }) {
 }
 
 function GroupCard({ group, speakers, startOpen, onChange, onToggle, onDelete }) {
-  const members = group.speaker_ids.map((id) => speakers.find((speaker) => speaker.id === id)?.airplay_name || id).join(", ");
+  const members = group.speaker_ids.map((id) => speakers.find((speaker) => speaker.id === id)?.exposed_name || id).join(", ");
   return <details class={`${cardClass} group device-card`} open={startOpen}>
     <summary class="flex min-h-[66px] cursor-pointer list-none items-center gap-3 px-[17px] py-3 hover:bg-[#21333a] [&::-webkit-details-marker]:hidden">
-      <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{group.airplay_name || group.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{members || "No speakers selected"}</small></span>
+      <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{group.exposed_name || group.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{members || "No speakers selected"}</small></span>
       <span class="whitespace-nowrap text-xs text-muted">{group.speaker_ids.length} {group.speaker_ids.length === 1 ? "speaker" : "speakers"}</span>
       <span class={`${chevronClass} mb-1 ml-2 mr-[3px]`} aria-hidden="true" />
     </summary>
     <div class="grid gap-4 border-t border-line p-[17px]">
-      <Text label="AirPlay name" value={group.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
+      <Text label="Exposed name" value={group.exposed_name} onInput={(value) => onChange("exposed_name", value)} />
       <fieldset class="m-0 min-w-0 border-0 p-0"><legend class="p-0 text-xs font-semibold text-[#d1e1de]">Included speakers</legend>
         <div class="mt-2.5 flex flex-wrap gap-[7px]">{speakers.map((speaker) => {
           const included = group.speaker_ids.includes(speaker.id);
-          return <button class={`member-chip inline-flex items-center gap-[7px] rounded-[7px] border px-2.5 py-1.5 text-xs hover:border-[#8abdac] ${included ? "border-[#73b990] bg-[#234437] text-[#d8f7e2]" : "border-[#516971] bg-[#192b33] text-[#d1e1de]"}`} type="button" aria-pressed={included} key={speaker.id} onClick={() => onToggle(speaker.id)}><span aria-hidden="true" class="text-sm">{included ? "✓" : "+"}</span>{speaker.airplay_name || speaker.id}</button>;
+          return <button class={`member-chip inline-flex items-center gap-[7px] rounded-[7px] border px-2.5 py-1.5 text-xs hover:border-[#8abdac] ${included ? "border-[#73b990] bg-[#234437] text-[#d8f7e2]" : "border-[#516971] bg-[#192b33] text-[#d1e1de]"}`} type="button" aria-pressed={included} key={speaker.id} onClick={() => onToggle(speaker.id)}><span aria-hidden="true" class="text-sm">{included ? "✓" : "+"}</span>{speaker.exposed_name || speaker.id}</button>;
         })}</div>
         {speakers.length === 0 && <p class="m-0 text-xs leading-normal text-muted">No speakers discovered yet.</p>}
       </fieldset>

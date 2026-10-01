@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG_PATH = "config.xml"
-DEFAULT_AIRPLAY_SUFFIX = " (Sendspin)"
+DEFAULT_EXPOSED_SUFFIX = " (Sendspin)"
 INBOUND = "inbound"
 OUTBOUND = "outbound"
 MAX_DELAY_MS = 500
@@ -38,11 +38,11 @@ class Endpoint:
 @dataclass
 class Speaker:
     id: str
-    airplay_name: str = ""
+    exposed_name: str = ""
     direction: str = OUTBOUND
     port: int = 0
     client_id: str = ""
-    hidden: bool = False
+    exposed: bool = True
     delay_ms: int | None = None
     endpoint: Endpoint = field(default_factory=Endpoint)
 
@@ -50,7 +50,7 @@ class Speaker:
 @dataclass
 class Group:
     id: str
-    airplay_name: str = ""
+    exposed_name: str = ""
     port: int = 0
     speaker_ids: list[str] = field(default_factory=list)
 
@@ -64,7 +64,7 @@ class Registry:
         port_base: int = 7000,
         port_range: int = 10,
         *,
-        airplay_suffix: str = DEFAULT_AIRPLAY_SUFFIX,
+        exposed_suffix: str = DEFAULT_EXPOSED_SUFFIX,
         speakers: list[Speaker] | None = None,
         groups: list[Group] | None = None,
     ) -> None:
@@ -73,7 +73,7 @@ class Registry:
         self.path = Path(path or DEFAULT_CONFIG_PATH)
         self.port_base = port_base
         self.port_range = port_range
-        self.airplay_suffix = airplay_suffix
+        self.exposed_suffix = exposed_suffix
         self._speakers = speakers or []
         self._groups = groups or []
         self._lock = threading.RLock()
@@ -87,8 +87,8 @@ class Registry:
             root = ET.parse(path).getroot()
         except ET.ParseError as error:
             raise ValueError(f"parse config {path}: {error}") from error
-        if root.tag != "airplay-sendspin":
-            raise ValueError(f"config {path} has root <{root.tag}>, want <airplay-sendspin>")
+        if root.tag != "sendspin-bridge":
+            raise ValueError(f"config {path} has root <{root.tag}>, want <sendspin-bridge>")
 
         speakers: list[Speaker] = []
         for node in root.findall("./speakers/speaker"):
@@ -97,10 +97,10 @@ class Registry:
                 Speaker(
                     id=node.get("id", ""),
                     client_id=node.get("client_id", ""),
-                    airplay_name=node.get("airplay_name", ""),
+                    exposed_name=node.get("exposed_name", ""),
                     direction=node.get("direction", OUTBOUND),
                     port=_integer(node.get("port"), "speaker port"),
-                    hidden=_boolean(node.get("hidden", "false"), "hidden"),
+                    exposed=_boolean(node.get("exposed", "true"), "exposed"),
                     delay_ms=_optional_delay(node.get("delay_ms")),
                     endpoint=Endpoint(
                         instance=endpoint.get("instance", "") if endpoint is not None else "",
@@ -115,7 +115,7 @@ class Registry:
             groups.append(
                 Group(
                     id=node.get("id", ""),
-                    airplay_name=node.get("airplay_name", ""),
+                    exposed_name=node.get("exposed_name", ""),
                     port=_integer(node.get("port"), "group port"),
                     speaker_ids=[member.get("id", "") for member in node.findall("speaker")],
                 )
@@ -124,7 +124,7 @@ class Registry:
             path,
             port_base,
             port_range,
-            airplay_suffix=root.get("airplay_suffix", DEFAULT_AIRPLAY_SUFFIX),
+            exposed_suffix=root.get("exposed_suffix", DEFAULT_EXPOSED_SUFFIX),
             speakers=speakers,
             groups=groups,
         )
@@ -178,16 +178,16 @@ class Registry:
                     continue
                 if speaker.direction != OUTBOUND:
                     return copy.deepcopy(speaker), False
-                changed = speaker.endpoint != endpoint or not speaker.airplay_name
+                changed = speaker.endpoint != endpoint or not speaker.exposed_name
                 speaker.endpoint = endpoint
-                if not speaker.airplay_name:
-                    speaker.airplay_name = name
+                if not speaker.exposed_name:
+                    speaker.exposed_name = name
                 if changed:
                     self.save()
                 return copy.deepcopy(speaker), False
             speaker = Speaker(
                 id=self._next_id(name),
-                airplay_name=name,
+                exposed_name=name,
                 direction=OUTBOUND,
                 port=self._next_port(),
                 endpoint=endpoint,
@@ -208,7 +208,7 @@ class Registry:
             speaker = Speaker(
                 id=self._next_id(name or client_id),
                 client_id=client_id,
-                airplay_name=name or client_id,
+                exposed_name=name or client_id,
                 direction=INBOUND,
                 port=self._next_port(),
             )
@@ -219,15 +219,15 @@ class Registry:
     def save(self) -> None:
         with self._lock:
             self._normalize()
-            root = ET.Element("airplay-sendspin", {"version": "1", "airplay_suffix": self.airplay_suffix})
+            root = ET.Element("sendspin-bridge", {"version": "1", "exposed_suffix": self.exposed_suffix})
             speakers = ET.SubElement(root, "speakers")
             for speaker in self._speakers:
                 attrs = {
                     "id": speaker.id,
-                    "airplay_name": speaker.airplay_name,
+                    "exposed_name": speaker.exposed_name,
                     "direction": speaker.direction,
                     "port": str(speaker.port),
-                    "hidden": str(speaker.hidden).lower(),
+                    "exposed": str(speaker.exposed).lower(),
                 }
                 if speaker.client_id:
                     attrs["client_id"] = speaker.client_id
@@ -248,7 +248,7 @@ class Registry:
                 node = ET.SubElement(
                     groups,
                     "group",
-                    {"id": group.id, "airplay_name": group.airplay_name, "port": str(group.port)},
+                    {"id": group.id, "exposed_name": group.exposed_name, "port": str(group.port)},
                 )
                 for speaker_id in group.speaker_ids:
                     ET.SubElement(node, "speaker", {"id": speaker_id})
@@ -276,7 +276,7 @@ class Registry:
                 client_ids.add(speaker.client_id)
             if speaker.direction not in (INBOUND, OUTBOUND):
                 raise ValueError(f"speaker {speaker.id!r} has invalid direction {speaker.direction!r}")
-            speaker.airplay_name = speaker.airplay_name or speaker.id
+            speaker.exposed_name = speaker.exposed_name or speaker.id
             speaker.port = speaker.port or self._next_port()
             if not -MAX_DELAY_MS <= (speaker.delay_ms or 0) <= MAX_DELAY_MS:
                 raise ValueError(f"speaker {speaker.id!r} has delay_ms {speaker.delay_ms}, want -500..500")
@@ -287,7 +287,7 @@ class Registry:
             if not group.id or group.id in group_ids:
                 raise ValueError("config has missing or duplicate group id")
             group_ids.add(group.id)
-            group.airplay_name = group.airplay_name or group.id
+            group.exposed_name = group.exposed_name or group.id
             group.port = group.port or self._next_port()
             seen_members: set[str] = set()
             for speaker_id in group.speaker_ids:
