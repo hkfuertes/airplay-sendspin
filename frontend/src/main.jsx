@@ -117,7 +117,7 @@ function App() {
         <span class="flex size-[30px] items-center justify-center gap-[3px] rounded-lg border border-[#5c9685] bg-[#173832]" aria-hidden="true"><span class="h-2.5 w-[3px] rounded-full bg-accent" /><span class="h-[18px] w-[3px] rounded-full bg-accent" /><span class="h-3.5 w-[3px] rounded-full bg-accent" /><span class="h-[7px] w-[3px] rounded-full bg-accent" /></span>
         <span>Sendspin<span class="font-normal text-muted"> Bridge</span></span>
       </div>
-      <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="AirPlay name suffix" value={config?.airplay_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.airplay_suffix = value; }); }} />
+      <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="AirPlay name suffix" placeholder="Suffix" value={config?.airplay_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.airplay_suffix = value; }); }} />
       <div class="flex flex-wrap items-center justify-end gap-2.5 max-[800px]:w-full max-[800px]:gap-2">
         <p class="m-0 max-w-[210px] text-xs text-accent empty:hidden max-[800px]:order-1 max-[800px]:w-full max-[800px]:max-w-none max-[800px]:text-right" role="status" aria-live="polite">{config ? message : ""}</p>
         <button class={quietButton} type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
