@@ -38,11 +38,11 @@ RUN set -eux; \
 
 COPY pyproject.toml setup.py build_raop.py ./
 COPY src ./src
-COPY --from=web-build /out ./src/airplay_sendspin/web
+COPY --from=web-build /out ./src/sendspin_bridge/web
 COPY tests ./tests
 RUN LIBRAOP_ROOT=/src/third_party/libraop python -m pip install --no-cache-dir --prefix=/install . \
  && PYTHONPATH=/src/src:/install/lib/python3.13/site-packages python -m unittest discover -s tests -v \
- && PYTHONPATH=/install/lib/python3.13/site-packages python -c 'from airplay_sendspin import _raop; assert _raop.lib.bridge_receiver_port == _raop.lib.bridge_receiver_port'
+ && PYTHONPATH=/install/lib/python3.13/site-packages python -c 'from sendspin_bridge import _raop; assert _raop.lib.bridge_receiver_port == _raop.lib.bridge_receiver_port'
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -52,13 +52,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /install /usr/local
-RUN python -m airplay_sendspin -h >/dev/null
+RUN python -m sendspin_bridge -h >/dev/null
 
-CMD ["python", "-m", "airplay_sendspin", "-config", "/data/config.xml"]
+CMD ["python", "-m", "sendspin_bridge", "-config", "/data/config.xml"]
 
 # Home Assistant add-on: config.xml lives in the user-editable addon_config.
 FROM runtime AS addon
 ARG BUILD_ARCH
 ARG BUILD_VERSION
 LABEL io.hass.type="addon" io.hass.arch="${BUILD_ARCH}" io.hass.version="${BUILD_VERSION}"
-CMD ["python", "-m", "airplay_sendspin", "-config", "/config/config.xml"]
+CMD ["python", "-m", "sendspin_bridge", "-config", "/config/config.xml"]

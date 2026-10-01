@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from airplay_sendspin.audio import CHUNK_SAMPLES, GroupBuffer, mixed_bytes
+from sendspin_bridge.audio import CHUNK_SAMPLES, GroupBuffer, mixed_bytes
 
 
 def pcm(value: int) -> bytes:

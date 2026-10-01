@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from airplay_sendspin.registry import Registry
-from airplay_sendspin.web import registry_from_payload, registry_to_payload
+from sendspin_bridge.registry import Registry
+from sendspin_bridge.web import registry_from_payload, registry_to_payload
 
 
 class ConfigPayloadTests(unittest.TestCase):

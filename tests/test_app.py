@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from airplay_sendspin.app import Manager, Target
-from airplay_sendspin.registry import Speaker
+from sendspin_bridge.app import Manager, Target
+from sendspin_bridge.registry import Speaker
 
 
 class FakeTarget:

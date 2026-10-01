@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from airplay_sendspin.registry import Endpoint, Registry
+from sendspin_bridge.registry import Endpoint, Registry
 
 
 class RegistryTests(unittest.TestCase):

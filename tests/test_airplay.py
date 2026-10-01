@@ -4,12 +4,12 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from airplay_sendspin.airplay import Advertiser
+from sendspin_bridge.airplay import Advertiser
 
 
 class AdvertiserTests(unittest.TestCase):
     def test_registers_without_blocking_the_event_loop(self) -> None:
-        with patch("airplay_sendspin.airplay.AsyncZeroconf") as factory:
+        with patch("sendspin_bridge.airplay.AsyncZeroconf") as factory:
             zeroconf = factory.return_value
             zeroconf.async_register_service = AsyncMock()
             zeroconf.async_unregister_service = AsyncMock()

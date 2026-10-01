@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sendspin-bridge = "airplay_sendspin.__main__:main"
+sendspin-bridge = "sendspin_bridge.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -22,4 +22,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-airplay_sendspin = ["_raop.*", "web/*"]
+sendspin_bridge = ["_raop.*", "web/*"]

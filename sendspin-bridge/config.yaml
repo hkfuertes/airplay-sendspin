@@ -1,12 +1,12 @@
 name: Sendspin Bridge
-version: "0.1.3"
-slug: airplay_sendspin
+version: "0.1.4"
+slug: sendspin_bridge
 description: Expose Sendspin speakers and groups as playback targets.
-url: https://github.com/hkfuertes/airplay-sendspin
+url: https://github.com/hkfuertes/sendspin-bridge
 arch:
   - aarch64
   - amd64
-image: ghcr.io/hkfuertes/sendspin-bridge-{arch}
+image: ghcr.io/hkfuertes/sendspin-bridge
 startup: services
 host_network: true
 map:
