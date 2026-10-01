@@ -26,7 +26,7 @@ from aiosendspin.server import (
 from .airplay import Advertiser, lan_ipv4, virtual_mac
 from .audio import CHUNK_FRAMES, CHUNK_MS, CHUNK_SAMPLES, GroupBuffer, chunk, mixed_bytes
 from .raop import FLUSH, PLAY, STOP, VOLUME, Receiver
-from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker
+from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker, Stereo
 from .web import ConfigWeb
 
 LOG = logging.getLogger(__name__)
@@ -122,16 +122,21 @@ class AirPlayInput:
 class GroupTarget:
     """One configured group AirPlay input, cached once for every member."""
 
-    def __init__(self, manager: Manager, group: Group) -> None:
+    def __init__(self, manager: Manager, group: Group, stereos: list[Stereo] | None = None, *, key: str | None = None) -> None:
         self.manager = manager
         self.group = group
-        self.input = AirPlayInput(manager, f"group:{group.id}", group.exposed_name, group.port)
+        self.input = AirPlayInput(manager, key or f"group:{group.id}", group.exposed_name, group.port)
         self.buffer = GroupBuffer(self.input.read_pcm)
+        self.channels: dict[str, tuple[int, str]] = {}
+        for stereo in stereos or []:
+            if stereo.left_id in group.speaker_ids and stereo.right_id in group.speaker_ids:
+                self.channels[stereo.left_id] = (0, stereo.right_id)
+                self.channels[stereo.right_id] = (1, stereo.left_id)
         self.active = False
 
     async def start(self) -> None:
         await self.input.start()
-        LOG.info("AirPlay group %r (%s) -> %d speakers", self.group.exposed_name, self.group.id, len(self.group.speaker_ids))
+        LOG.info("AirPlay target %r (%s) -> %d speakers", self.group.exposed_name, self.group.id, len(self.group.speaker_ids))
 
     def handle_events(self) -> None:
         for event, volume in self.input.events() or ():
@@ -146,9 +151,13 @@ class GroupTarget:
             elif event == VOLUME:
                 self.manager.set_group_volume(self.group.speaker_ids, _volume_percent(volume))
 
-    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int) -> None:
+    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int, speaker_id: str) -> None:
         if self.active:
-            self.buffer.mix_into(output, playback_chunk, delay_ms)
+            route = self.channels.get(speaker_id)
+            partner = self.manager.targets.get(route[1]) if route else None
+            # ponytail: when one side disconnects, the surviving device gets full audio.
+            channel = route[0] if partner is not None and partner.player is not None else None
+            self.buffer.mix_into(output, playback_chunk, delay_ms, channel)
 
     async def close(self) -> None:
         await self.input.close()
@@ -215,7 +224,7 @@ class Target:
         if self.playing and self.input is not None:
             output += chunk(self.input.read_pcm())
         for group in self.groups:
-            group.mix_into(output, playback_chunk, self.delay_ms)
+            group.mix_into(output, playback_chunk, self.delay_ms, self.speaker.id)
         return mixed_bytes(output)
 
     async def push(self, pcm: bytes, play_start_us: int) -> None:
@@ -277,6 +286,7 @@ class Manager:
         self.restart_requested = asyncio.Event()
         self.targets: dict[str, Target] = {}
         self.group_targets: dict[str, GroupTarget] = {}
+        self.stereo_targets: dict[str, GroupTarget] = {}
         self.member_groups: dict[str, list[GroupTarget]] = {}
         self.remove_server_listener = None
         self.audio_task: asyncio.Task[None] | None = None
@@ -312,13 +322,22 @@ class Manager:
             speaker_state=self.speaker_state,
             set_speaker_volume=self.set_speaker_volume,
             set_group_volume=self.set_group_volume,
+            set_stereo_volume=self.set_stereo_volume,
             replace_registry=self.replace_registry,
             restart=self.request_restart,
         )
         await self.web.start()
         LOG.info("Configuration UI: %s", self.web.url)
+        stereos = self.registry.stereos()
+        for stereo in stereos:
+            group = Group(stereo.id, stereo.exposed_name, stereo.port, [stereo.left_id, stereo.right_id])
+            target = GroupTarget(self, group, [stereo], key=f"stereo:{stereo.id}")
+            await target.start()
+            self.stereo_targets[stereo.id] = target
+            for speaker_id in group.speaker_ids:
+                self.member_groups.setdefault(speaker_id, []).append(target)
         for group in self.registry.groups():
-            target = GroupTarget(self, group)
+            target = GroupTarget(self, group, stereos)
             await target.start()
             self.group_targets[group.id] = target
             for speaker_id in group.speaker_ids:
@@ -349,9 +368,10 @@ class Manager:
         for target in list(self.targets.values()):
             await target.close()
         self.targets.clear()
-        for target in self.group_targets.values():
+        for target in (*self.group_targets.values(), *self.stereo_targets.values()):
             await target.close()
         self.group_targets.clear()
+        self.stereo_targets.clear()
         if self.server is not None:
             await self.server.close()
             self.server = None
@@ -386,6 +406,13 @@ class Manager:
         group = self.group_targets.get(group_id) if group_id is not None else None
         if group is not None and group.active and updated:
             group.input.send_volume(round(sum(updated.values()) / len(updated)))
+        return updated
+
+    def set_stereo_volume(self, speaker_ids: list[str], volume: int, stereo_id: str) -> dict[str, int]:
+        updated = self.set_group_volume(speaker_ids, volume)
+        stereo = self.stereo_targets.get(stereo_id)
+        if stereo is not None and stereo.active and updated:
+            stereo.input.send_volume(round(sum(updated.values()) / len(updated)))
         return updated
 
     def _on_server_event(self, _server: SendspinServer, event) -> None:
@@ -436,7 +463,7 @@ class Manager:
         next_tick = loop.time()
         try:
             while True:
-                for target in self.group_targets.values():
+                for target in (*self.stereo_targets.values(), *self.group_targets.values()):
                     target.handle_events()
                 for target in self.targets.values():
                     target.handle_events()

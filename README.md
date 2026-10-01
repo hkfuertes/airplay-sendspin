@@ -1,8 +1,8 @@
 # Sendspin Bridge
 
-AirPlay 1 targets for Sendspin speakers and groups. By default, every
-discovered speaker gets its own target; set `exposed="false"` to reserve it for
-groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
+AirPlay 1 targets for Sendspin speakers, stereo pairs and groups. By default,
+every discovered speaker gets its own target; set `exposed="false"` to reserve
+it for pairs and groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
 it directly to that speaker's Sendspin session.
 
 ## Docker / homelab
@@ -21,7 +21,7 @@ Host networking is required for mDNS and AirPlay discovery.
 
 Sendspin Bridge serves its single-page editor on port `8080`; open
 `http://192.168.1.10:8080/` to edit speaker names, visibility, signed group
-offsets, groups, and the live volume of connected speakers. Volume is not
+offsets, stereo pairs, groups, and the live volume of connected speakers. Volume is not
 persisted. Discovery-managed IDs, ports, connection direction, and endpoints
 stay out of the UI. Its fixed token is compiled into the internal UI,
 so do not expose this listener outside a trusted LAN.
@@ -63,9 +63,15 @@ source is checked in.
       <endpoint instance="kitchen._sendspin._tcp.local."
                 host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
+    <speaker id="salon" exposed_name="Salón" direction="inbound" port="7010"
+             exposed="false"><endpoint path="/sendspin"/></speaker>
   </speakers>
+  <stereos>
+    <stereo id="pareja" exposed_name="Salón estéreo" port="7020"
+            left_id="cocina" right_id="salon"/>
+  </stereos>
   <groups>
-    <group id="casa" exposed_name="Toda la casa" port="7020">
+    <group id="casa" exposed_name="Toda la casa" port="7030">
       <speaker id="cocina"/>
       <speaker id="salon"/>
     </group>
@@ -75,7 +81,7 @@ source is checked in.
 
 - `id` is a stable, human-readable config key; `client_id` is the Sendspin
   identity, never the friendly name. `exposed_name` is the published name;
-  `exposed_suffix` is appended to every speaker and group name. Set it to `""`
+  `exposed_suffix` is appended to every speaker, stereo and group name. Set it to `""`
   to omit it.
 - `direction="outbound"`: bridge discovers and dials `_sendspin._tcp`.
 - `direction="inbound"`: a player discovers the bridge's
@@ -88,10 +94,17 @@ source is checked in.
   holds it back and negative advances it. It works for both `inbound` and
   `outbound` speakers. The first hello writes `delay_ms="0"`; after that the
   XML value is authoritative.
-- Each `<group>` is written by hand and is advertised as its own AirPlay target
+- Each `<stereo>` is an AirPlay target with two distinct speakers: `left_id`
+  receives the left channel and `right_id` the right, each duplicated to both
+  output channels so mono-only or stereo devices work. A speaker can belong to
+  at most one pair. If one side disconnects, the other plays the full mix.
+  Existing configurations without `<stereos>` continue to load unchanged.
+- Each `<group>` is advertised as its own AirPlay target
   (`port` is filled in if missing). It plays in sync on every member `speaker
-  id`. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
-  member the same Sendspin timestamp. Visible members stay advertised on their
+  id`. A stereo pair is added to the group by listing both of its speaker IDs;
+  listing only one is rejected. The dashboard offers the pair as one membership
+  choice. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
+  member the same Sendspin timestamp, routing left/right only for paired members. Visible members stay advertised on their
   own; unexposed members are not advertised but remain connected to feed groups.
   If a speaker's own target and one of its groups play at once, the speaker
   mixes both. Group volume moves the members' average and keeps their

@@ -2,9 +2,9 @@
 
 ## Objetivo
 
-Un destino AirPlay 1 por altavoz Sendspin descubierto y otro por cada grupo
-configurado. mDNS, `config.xml` persistente y un editor web mínimo para
-cambiarlo visualmente. No soporta AirPlay 2 ni parejas estéreo.
+Un destino AirPlay 1 por altavoz Sendspin descubierto, pareja estéreo y grupo
+configurado. mDNS, `config.xml` persistente y un editor web para cambiarlo
+visualmente. No soporta AirPlay 2.
 
 ## Runtime
 
@@ -43,10 +43,17 @@ de diez desde 7000.
              direction="outbound" port="7000" exposed="true" delay_ms="0">
       <endpoint instance="…" host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
+    <speaker id="salon" direction="inbound" port="7010" exposed="false">
+      <endpoint path="/sendspin"/>
+    </speaker>
   </speakers>
+  <stereos>
+    <stereo id="pareja" exposed_name="Sala estéreo" port="7020"
+            left_id="cocina" right_id="salon"/>
+  </stereos>
   <groups>
-    <group id="casa" exposed_name="Toda la casa" port="7020">
-      <speaker id="cocina"/>
+    <group id="casa" exposed_name="Toda la casa" port="7030">
+      <speaker id="cocina"/><speaker id="salon"/>
     </group>
   </groups>
 </sendspin-bridge>
@@ -55,17 +62,21 @@ de diez desde 7000.
 - `outbound`: el bridge descubre o marca al reproductor Sendspin.
 - `inbound`: el reproductor descubre y marca al bridge. `client_id` es la
   identidad que evita que un altavoz use ambos sentidos.
-- `exposed="false"` no anuncia el target individual; sigue reproduciendo grupos.
+- `exposed="false"` no anuncia el target individual; sigue reproduciendo grupos y parejas.
+- Cada `<stereo>` anuncia un target propio, usa dos altavoces distintos y enruta
+  L/R duplicando cada lado en ambos canales de salida. Los grupos incluyen la
+  pareja listando sus dos IDs de altavoz; un solo lado se rechaza. Si falta un
+  miembro conectado, el restante recibe la mezcla estéreo completa.
 - `delay_ms` está incluido en `[-500, 500]` y afecta sólo al audio de grupos:
   positivo lo retiene, negativo lo adelanta. El primer hello materializa `0`.
 
 ## Grupos y volumen
 
-Cada `<group>` tiene su propio receptor AirPlay. Su PCM se guarda por índice de
-chunk; cada miembro mezcla la misma copia con su entrada individual usando
-saturación S16. El offset de cada miembro se aplica al índice de muestras antes
-de mezclar. El volumen del grupo mueve la media de los miembros sin borrar su
-diferencia, limitado a 0–100.
+Cada `<group>` y `<stereo>` tiene su propio receptor AirPlay. Su PCM se guarda
+por índice de chunk; cada miembro mezcla su copia (L, R o estéreo) con su
+entrada individual usando saturación S16. El offset de cada miembro se aplica
+por fotogramas completos antes de mezclar, sin permutar L/R. El volumen mueve la
+media de los miembros sin borrar su diferencia, limitado a 0–100.
 
 No se usan grupos internos de `aiosendspin`: un `PushStream` nativo no mezcla
 entradas concurrentes y sustituiría el target individual. La mezcla se hace
@@ -86,5 +97,6 @@ cambiar `sendspin-bridge/config.yaml` en `main`.
 - CFFI abre y cierra un receptor RAOP real.
 - XML conserva IDs, direcciones y `delay_ms` firmado.
 - Un grupo retiene con delay positivo, adelanta con negativo y satura la mezcla.
+- Una pareja reparte L/R, admite multiroom y evita desplazar medio fotograma estéreo.
 - El build Docker ejecuta los tests Python, carga la extensión nativa y sirve
   la UI; un guardado de UI persiste el XML y reinicia el bridge.

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sendspin_bridge.registry import Endpoint, Registry
+from sendspin_bridge.registry import Endpoint, Group, Registry, Speaker, Stereo
 
 
 class RegistryTests(unittest.TestCase):
@@ -55,6 +55,39 @@ class RegistryTests(unittest.TestCase):
             xml = path.read_text()
             self.assertIn('exposed="false"', xml)
             self.assertNotIn("airplay", xml.lower())
+
+    def test_stereo_round_trip_preserves_existing_speakers_and_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.xml"
+            path.write_text('<sendspin-bridge version="1"><speakers>'
+                            '<speaker id="left"><endpoint/></speaker>'
+                            '<speaker id="right"><endpoint/></speaker>'
+                            '<speaker id="kitchen"><endpoint/></speaker>'
+                            '</speakers><groups><group id="home">'
+                            '<speaker id="left"/><speaker id="right"/><speaker id="kitchen"/>'
+                            '</group></groups></sendspin-bridge>')
+            registry = Registry.load(path)
+            self.assertEqual(registry.stereos(), [])
+            Registry(path, speakers=registry.speakers(), groups=registry.groups(),
+                     stereos=[Stereo("pair", "left", "right", "Living room")]).save()
+            restored = Registry.load(path)
+            self.assertEqual(restored.stereos()[0].port, 7040)
+            self.assertEqual(restored.stereos()[0].exposed_name, "Living room")
+            self.assertEqual(restored.groups()[0].speaker_ids, ["left", "right", "kitchen"])
+            self.assertIn('<stereos>', path.read_text())
+
+    def test_stereo_rejects_reused_speakers_and_half_group_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.xml"
+            speakers = [Speaker(id=id_) for id_ in ("left", "right", "kitchen")]
+            for stereos, groups, error in (
+                ([Stereo("one", "left", "left")], [], "distinct"),
+                ([Stereo("one", "left", "missing")], [], "existing"),
+                ([Stereo("one", "left", "right"), Stereo("two", "left", "kitchen")], [], "reuses"),
+                ([Stereo("one", "left", "right")], [Group("home", speaker_ids=["left"])], "both speakers"),
+            ):
+                with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                    Registry(path, speakers=speakers, stereos=stereos, groups=groups).save()
 
     def test_inbound_client_cannot_claim_an_outbound_speaker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
