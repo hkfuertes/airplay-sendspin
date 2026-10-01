@@ -1,4 +1,4 @@
-# Spec: puente AirPlay 1 → Sendspin (Python)
+# Spec: Sendspin Bridge — puente AirPlay 1 → Sendspin (Python)
 
 ## Objetivo
 
@@ -37,25 +37,25 @@ iPhone ─RAOP─> libraop (PCM S16LE estéreo, 44.1 kHz)
 de diez desde 7000.
 
 ```xml
-<airplay-sendspin version="1" airplay_suffix=" (Sendspin)">
+<sendspin-bridge version="1" exposed_suffix=" (Sendspin)">
   <speakers>
-    <speaker id="cocina" client_id="…" airplay_name="Cocina"
-             direction="outbound" port="7000" hidden="false" delay_ms="0">
+    <speaker id="cocina" client_id="…" exposed_name="Cocina"
+             direction="outbound" port="7000" exposed="true" delay_ms="0">
       <endpoint instance="…" host="192.168.1.50" port="8928" path="/sendspin"/>
     </speaker>
   </speakers>
   <groups>
-    <group id="casa" airplay_name="Toda la casa" port="7020">
+    <group id="casa" exposed_name="Toda la casa" port="7020">
       <speaker id="cocina"/>
     </group>
   </groups>
-</airplay-sendspin>
+</sendspin-bridge>
 ```
 
 - `outbound`: el bridge descubre o marca al reproductor Sendspin.
 - `inbound`: el reproductor descubre y marca al bridge. `client_id` es la
   identidad que evita que un altavoz use ambos sentidos.
-- `hidden="true"` no anuncia el target individual; sigue reproduciendo grupos.
+- `exposed="false"` no anuncia el target individual; sigue reproduciendo grupos.
 - `delay_ms` está incluido en `[-500, 500]` y afecta sólo al audio de grupos:
   positivo lo retiene, negativo lo adelanta. El primer hello materializa `0`.
 

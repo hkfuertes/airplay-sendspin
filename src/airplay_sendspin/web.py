@@ -16,7 +16,7 @@ from .registry import Endpoint, Group, Registry, Speaker
 LOG = logging.getLogger(__name__)
 TOKEN_HEADER = "X-Config-Token"
 # ponytail: internal-only UI; replace this before exposing it outside the trusted LAN.
-CONFIG_TOKEN = "airplay-sendspin"
+CONFIG_TOKEN = "sendspin-bridge"
 
 
 class ConfigWeb:
@@ -132,15 +132,15 @@ class ConfigWeb:
 
 def registry_to_payload(registry: Registry) -> dict:
     return {
-        "airplay_suffix": registry.airplay_suffix,
+        "exposed_suffix": registry.exposed_suffix,
         "speakers": [
             {
                 "id": speaker.id,
-                "airplay_name": speaker.airplay_name,
+                "exposed_name": speaker.exposed_name,
                 "direction": speaker.direction,
                 "port": speaker.port,
                 "client_id": speaker.client_id,
-                "hidden": speaker.hidden,
+                "exposed": speaker.exposed,
                 "delay_ms": speaker.delay_ms,
                 "endpoint": {
                     "instance": speaker.endpoint.instance,
@@ -154,7 +154,7 @@ def registry_to_payload(registry: Registry) -> dict:
         "groups": [
             {
                 "id": group.id,
-                "airplay_name": group.airplay_name,
+                "exposed_name": group.exposed_name,
                 "port": group.port,
                 "speaker_ids": group.speaker_ids,
             }
@@ -174,7 +174,7 @@ def registry_from_payload(payload: object, path: str, port_base: int, port_range
         path,
         port_base,
         port_range,
-        airplay_suffix=_text(payload, "airplay_suffix", strip=False),
+        exposed_suffix=_text(payload, "exposed_suffix", strip=False),
         speakers=speakers,
         groups=groups,
     )
@@ -190,11 +190,11 @@ def _speaker(value: object, index: int) -> Speaker:
         delay = _integer(delay, f"speaker {index} delay_ms", -500, 500)
     return Speaker(
         id=_required_text(data, "id", f"speaker {index}"),
-        airplay_name=_text(data, "airplay_name"),
+        exposed_name=_text(data, "exposed_name"),
         direction=_text(data, "direction", "outbound"),
         port=_integer(data.get("port", 0), f"speaker {index} port", 0, 65535),
         client_id=_text(data, "client_id"),
-        hidden=_boolean(data.get("hidden", False), f"speaker {index} hidden"),
+        exposed=_boolean(data.get("exposed", True), f"speaker {index} exposed"),
         delay_ms=delay,
         endpoint=Endpoint(
             instance=_text(endpoint, "instance"),
@@ -212,7 +212,7 @@ def _group(value: object, index: int) -> Group:
         raise ValueError(f"group {index} speaker_ids must contain strings")
     return Group(
         id=_required_text(data, "id", f"group {index}"),
-        airplay_name=_text(data, "airplay_name"),
+        exposed_name=_text(data, "exposed_name"),
         port=_integer(data.get("port", 0), f"group {index} port", 0, 65535),
         speaker_ids=members,
     )

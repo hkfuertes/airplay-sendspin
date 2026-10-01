@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from airplay_sendspin.app import Manager
+from airplay_sendspin.app import Manager, Target
+from airplay_sendspin.registry import Speaker
 
 
 class FakeTarget:
@@ -17,6 +18,11 @@ class FakeTarget:
 
 
 class ManagerVolumeTests(unittest.TestCase):
+    def test_only_exposed_speakers_get_an_input(self) -> None:
+        manager = object.__new__(Manager)
+        self.assertIsNone(Target(manager, Speaker(id="kitchen", exposed=False), []).input)
+        self.assertIsNotNone(Target(manager, Speaker(id="bedroom", exposed=True), []).input)
+
     def test_individual_volume_is_live_only(self) -> None:
         manager = object.__new__(Manager)
         kitchen = FakeTarget()

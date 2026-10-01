@@ -39,7 +39,7 @@ class Config:
     port_range: int = 10
     config_path: str = "config.xml"
     server_port: int = 8927
-    server_name: str = "AirPlay Sendspin"
+    server_name: str = "Sendspin Bridge"
     web_host: str = "0.0.0.0"
     web_port: int = 8080
 
@@ -58,7 +58,7 @@ class AirPlayInput:
     async def start(self) -> None:
         mac = virtual_mac(self.key)
         self.receiver = Receiver(
-            self.name + self.manager.registry.airplay_suffix,
+            self.name + self.manager.registry.exposed_suffix,
             mac,
             self.manager.address,
             self.port_base,
@@ -66,7 +66,7 @@ class AirPlayInput:
         )
         try:
             self.advertiser = Advertiser(
-                self.name + self.manager.registry.airplay_suffix,
+                self.name + self.manager.registry.exposed_suffix,
                 mac,
                 self.manager.address,
                 self.receiver.port,
@@ -104,13 +104,13 @@ class GroupTarget:
     def __init__(self, manager: Manager, group: Group) -> None:
         self.manager = manager
         self.group = group
-        self.input = AirPlayInput(manager, f"group:{group.id}", group.airplay_name, group.port)
+        self.input = AirPlayInput(manager, f"group:{group.id}", group.exposed_name, group.port)
         self.buffer = GroupBuffer(self.input.read_pcm)
         self.active = False
 
     async def start(self) -> None:
         await self.input.start()
-        LOG.info("AirPlay group %r (%s) -> %d speakers", self.group.airplay_name, self.group.id, len(self.group.speaker_ids))
+        LOG.info("AirPlay group %r (%s) -> %d speakers", self.group.exposed_name, self.group.id, len(self.group.speaker_ids))
 
     def handle_events(self) -> None:
         for event, volume in self.input.events() or ():
@@ -140,7 +140,7 @@ class Target:
         self.manager = manager
         self.speaker = speaker
         self.groups = groups
-        self.input = None if speaker.hidden else AirPlayInput(manager, speaker.id, speaker.airplay_name, speaker.port)
+        self.input = AirPlayInput(manager, speaker.id, speaker.exposed_name, speaker.port) if speaker.exposed else None
         self.player = None
         self.stream = None
         self.playing = False
@@ -151,7 +151,7 @@ class Target:
     async def start(self) -> None:
         if self.input is not None:
             await self.input.start()
-        LOG.info("AirPlay target %r (%s)", self.speaker.airplay_name, self.speaker.id)
+        LOG.info("AirPlay target %r (%s)", self.speaker.exposed_name, self.speaker.id)
 
     async def attach(self, player) -> None:
         if self.player is player:
@@ -310,7 +310,7 @@ class Manager:
                     retry_initial_connection=True,
                     retry_indefinitely=True,
                 )
-        self.audio_task = asyncio.create_task(self._pump_audio(), name="airplay-sendspin-audio")
+        self.audio_task = asyncio.create_task(self._pump_audio(), name="sendspin-bridge-audio")
         LOG.info("Sendspin server listening on %s:%d", self.address, self.config.server_port)
 
     async def close(self) -> None:

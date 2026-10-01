@@ -1,7 +1,7 @@
-# Build once with: docker build --target runtime -t airplay-sendspin:latest .
+# Build once with: docker build --target runtime -t sendspin-bridge:latest .
 services:
   bridge:
-    image: airplay-sendspin:latest
+    image: sendspin-bridge:latest
     network_mode: host
     volumes:
       - ./state:/data
