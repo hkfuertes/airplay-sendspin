@@ -11,7 +11,7 @@ const secondaryButton = `${buttonClass} border-[#5b9680] bg-[#1b3c32] text-[#ddf
 const cardClass = "overflow-hidden rounded-[9px] border border-line bg-surface open:border-[#597369]";
 const inputClass = "min-w-0 rounded-[7px] border border-[#516971] bg-[#101e25] px-2.5 py-2 text-[13px] text-ink focus:border-accent";
 const deviceNameClass = "grid min-w-0 flex-1 gap-[3px]";
-const chevronClass = "size-2 shrink-0 rotate-45 border-b-2 border-r-2 border-[#a3bbb6] group-open:-translate-y-1 group-open:rotate-[225deg]";
+const chevronClass = "size-2 shrink-0 rotate-45 border-b-2 border-r-2 border-[#a3bbb6] group-open:rotate-[225deg]";
 const emptyClass = "rounded-[9px] border border-dashed border-[#52636c] p-[17px] text-[13px] text-muted";
 
 function blankGroup() {
@@ -113,18 +113,20 @@ function App() {
   };
 
   return <div class="mx-auto max-w-[1040px] px-6 pb-10 max-sm:px-3.5">
-    <header class="sticky top-0 z-10 flex min-h-16 items-center justify-between gap-4 border-b border-line bg-canvas py-2 max-[800px]:flex-wrap max-[800px]:gap-1.5">
-      <div class="flex items-center gap-2.5 whitespace-nowrap text-base font-bold tracking-tight">
-        <span class="flex size-[30px] items-center justify-center gap-[3px] rounded-lg border border-[#5c9685] bg-[#173832]" aria-hidden="true"><span class="h-2.5 w-[3px] rounded-full bg-accent" /><span class="h-[18px] w-[3px] rounded-full bg-accent" /><span class="h-3.5 w-[3px] rounded-full bg-accent" /><span class="h-[7px] w-[3px] rounded-full bg-accent" /></span>
-        <span>Sendspin<span class="font-normal text-muted"> Bridge</span></span>
-      </div>
-      <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="Exposed name suffix" placeholder="Suffix" value={config?.exposed_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.exposed_suffix = value; }); }} />
-      <div class="flex flex-wrap items-center justify-end gap-2.5 max-[800px]:w-full max-[800px]:gap-2">
-        <p class="m-0 max-w-[210px] text-xs text-accent empty:hidden max-[800px]:order-1 max-[800px]:w-full max-[800px]:max-w-none max-[800px]:text-right" role="status" aria-live="polite">{config ? message : ""}</p>
-        <button class={quietButton} type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
-        <button class={primaryButton} type="submit" form="config-form" disabled={!config || saving}>{saving ? "Saving…" : "Save & restart"}</button>
-      </div>
-    </header>
+    <div class="sticky top-0 z-10 bg-canvas">
+      <header class="flex min-h-16 items-center justify-between gap-4 border-b border-line py-2 max-[800px]:flex-wrap max-[800px]:gap-1.5">
+        <div class="flex items-center gap-2.5 whitespace-nowrap text-base font-bold tracking-tight">
+          <img class="size-[30px] shrink-0" src="/favicon.svg" alt="" aria-hidden="true" />
+          <span>Sendspin<span class="font-normal text-muted"> Bridge</span></span>
+        </div>
+        <input class={`${inputClass} ml-auto box-border h-[38px] w-[120px] max-[800px]:w-[min(30vw,120px)]`} type="text" form="config-form" aria-label="Exposed name suffix" placeholder="Suffix" value={config?.exposed_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.exposed_suffix = value; }); }} />
+        <div class="flex flex-wrap items-center justify-end gap-2.5 max-[800px]:w-full max-[800px]:gap-2">
+          <button class={quietButton} type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
+          <button class={primaryButton} type="submit" form="config-form" disabled={!config || saving}>{saving ? "Saving…" : "Save & restart"}</button>
+        </div>
+      </header>
+      <div class="my-2 w-full rounded-lg border border-[#5b9680] bg-[#1b3c32] px-4 py-2.5 text-[13px] text-[#ddf9e8] empty:hidden" role="status" aria-live="polite">{config ? message : ""}</div>
+    </div>
 
     <main>
       <h1 class="sr-only">Speakers & groups</h1>
@@ -137,7 +139,20 @@ function App() {
             <div><h2 id="speakers-title" class="mb-0.5 text-[19px] tracking-tight">Speakers <span class="ml-1 text-sm font-normal text-muted">{config.speakers.length}</span></h2><p class="text-xs text-muted">Discovered automatically · Adjust volume directly or expand settings to edit.</p></div>
           </div>
           <div class="grid gap-2">
-            {config.speakers.map((speaker, index) => <SpeakerCard key={speaker.id} speaker={speaker} onChange={(field, value) => update((copy) => { copy.speakers[index][field] = value; })} onPreviewVolume={(volume) => update((copy) => { copy.speakers[index].volume = volume; })} onCommitVolume={(volume) => setVolume(speaker.id, volume)} />)}
+            {config.speakers.map((speaker, index) => <SpeakerCard
+              key={speaker.id} speaker={speaker}
+              onChange={(field, value) => update((copy) => { copy.speakers[index][field] = value; })}
+              onPreviewVolume={(volume) => update((copy) => { copy.speakers[index].volume = volume; })}
+              onCommitVolume={(volume) => setVolume(speaker.id, volume)}
+              onDelete={() => {
+                if (!window.confirm(`Remove ${speaker.exposed_name || speaker.id} from the configuration and groups? Discovered speakers can reappear while still available.`)) return;
+                update((copy) => {
+                  copy.speakers = copy.speakers.filter((item) => item.id !== speaker.id);
+                  copy.groups.forEach((group) => { group.speaker_ids = group.speaker_ids.filter((id) => id !== speaker.id); });
+                });
+                setMessage("Speaker removed. Save & restart to apply.");
+              }}
+            />)}
             {config.speakers.length === 0 && <p class={emptyClass}>No speakers discovered yet. They will appear here when they connect.</p>}
           </div>
         </section>
@@ -160,7 +175,7 @@ function App() {
   </div>;
 }
 
-function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume }) {
+function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume, onDelete }) {
   const connected = Boolean(speaker.connected);
   const volume = Number(speaker.volume ?? 100);
   const volumeId = `volume-${encodeURIComponent(speaker.id)}`;
@@ -183,7 +198,10 @@ function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume }) {
       <div class="grid gap-4 border-t border-line p-[17px]"><div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
         <Text label="Exposed name" value={speaker.exposed_name} onInput={(value) => onChange("exposed_name", value)} />
         <NumberField label="Group offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
-      </div><p class="m-0 text-xs leading-normal text-muted">Group offset: −500 to 500 ms.</p></div>
+      </div>
+      <p class="m-0 text-xs leading-normal text-muted">Group offset: −500 to 500 ms.</p>
+      <div class="border-t border-line pt-3"><button class="p-0 text-xs text-[#ffbdb4] hover:underline" type="button" aria-label={`Remove ${speaker.exposed_name || speaker.id}`} onClick={onDelete}>Remove speaker</button></div>
+      </div>
     </details>
   </article>;
 }

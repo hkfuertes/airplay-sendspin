@@ -78,8 +78,8 @@ fijada de libraop, aplica `patches/libraop/`, compila la extensión CFFI y
 empaqueta Python 3.13 con `aiosendspin`. La etapa `runtime` usa
 `/data/config.xml`; `addon` usa `/config/config.xml` y host networking.
 
-El workflow del add-on publica imágenes amd64 y aarch64 al cambiar
-`airplay-sendspin/config.yaml` en `main`.
+El workflow publica una imagen multiarquitectura amd64, arm64 y arm/v7 al
+cambiar `sendspin-bridge/config.yaml` en `main`.
 
 ## Comprobaciones mínimas
 

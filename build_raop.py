@@ -20,16 +20,16 @@ int bridge_receiver_read_event(bridge_receiver_t *receiver, double *volume);
 """)
 
 root = Path(os.environ.get("LIBRAOP_ROOT", "third_party/libraop")).resolve()
-arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(
+arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64", "arm": "arm", "armv7l": "arm", "armv8l": "arm"}.get(
     os.environ.get("TARGETARCH", platform.machine()), platform.machine()
 )
 
 ffibuilder.set_source(
-    "airplay_sendspin._raop",
+    "sendspin_bridge._raop",
     '#include "bridge.h"',
-    sources=["src/airplay_sendspin/native/bridge.c"],
+    sources=["src/sendspin_bridge/native/bridge.c"],
     include_dirs=[str(path) for path in [
-        "src/airplay_sendspin/native",
+        "src/sendspin_bridge/native",
         root / "src",
         root / "src/inc",
         root / "crosstools/src",

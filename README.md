@@ -33,14 +33,15 @@ restart. Use `-web-host` and `-web-port` to change the listener.
 ## Home Assistant add-on
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
-then install **Sendspin Bridge**. Bump `airplay-sendspin/config.yaml`'s
-`version` and merge it to `main` to publish matching native amd64 and aarch64
-images; the workflow builds one architecture at a time. Home Assistant pulls
-the image tag with that version. As speakers are discovered, the bridge writes
+then install **Sendspin Bridge**. Bump `sendspin-bridge/config.yaml`'s
+`version` and merge it to `main` to publish one image tag with amd64, arm64 and
+arm/v7 variants; Docker picks the right variant automatically. Home Assistant
+supports amd64 and aarch64; arm/v7 is available for direct Docker use.
+As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
-them. The add-on slug and folder remain `airplay_sendspin`. Fresh `config.xml` files
-use the `<sendspin-bridge>` root.
+them. The add-on slug is `sendspin_bridge`; fresh `config.xml` files use the
+`<sendspin-bridge>` root.
 
 ## `state/config.xml`
 
