@@ -4,9 +4,6 @@ import "./style.css";
 
 // ponytail: internal-only UI; replace this before exposing it outside the trusted LAN.
 const CONFIG_TOKEN = "airplay-sendspin";
-const inputClass = "mt-1";
-const buttonClass = "rounded-lg px-3 py-2 text-sm font-semibold transition";
-const cardClass = "rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-black/10";
 
 function blankGroup() {
   const id = `group-${crypto.randomUUID()}`;
@@ -25,6 +22,7 @@ function App() {
   const [config, setConfig] = useState(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [newGroupId, setNewGroupId] = useState(null);
 
   const api = async (path, options = {}) => {
     const response = await fetch(path, {
@@ -104,117 +102,138 @@ function App() {
     setSaving(false);
   };
 
-  if (!config) return <main class="mx-auto max-w-6xl p-8 text-slate-300">Loading configuration… {message}</main>;
+  const connected = config?.speakers.filter((speaker) => speaker.connected).length ?? 0;
+  const visible = config?.speakers.filter((speaker) => !speaker.hidden).length ?? 0;
 
-  return <main class="mx-auto max-w-6xl p-4 pb-16 sm:p-8">
-    <header class="mb-8 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-6 shadow-xl shadow-black/20 sm:flex sm:items-end sm:justify-between">
-      <div>
-        <p class="text-sm font-semibold tracking-[0.18em] text-cyan-300">AIRPLAY SENDSPIN</p>
-        <h1 class="mt-1 text-3xl font-bold tracking-tight">Configuration</h1>
-        <p class="mt-2 max-w-2xl text-sm text-slate-400">{config.speakers.length} speakers discovered. Saving restarts the bridge and stops active audio.</p>
+  return <div class="page-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><span /><span /><span /><span /></span>
+        <span>Sendspin<span class="brand-light"> Bridge</span></span>
       </div>
-      <button class={`${buttonClass} mt-4 bg-slate-800 hover:bg-slate-700 sm:mt-0`} type="button" onClick={load}>Reload</button>
+      <button class="button button-quiet" type="button" disabled={saving} onClick={load} title="Reload discards unsaved changes">↻ <span>Reload</span></button>
     </header>
 
-    <form onSubmit={save} class="space-y-8">
-      <section class={cardClass}>
-        <Text label="AirPlay suffix" value={config.airplay_suffix} onInput={(value) => update((copy) => { copy.airplay_suffix = value; })} />
-      </section>
+    <main>
+      <div class="page-heading">
+        <h1>Speakers & groups</h1>
+        <p>Manage your AirPlay destinations. Volume is live; other changes need saving.</p>
+      </div>
 
-      <section>
-        <div class="mb-4">
-          <h2 class="text-xl font-bold">Speakers</h2>
-          <p class="mt-1 text-sm text-slate-400">They are discovered automatically. Adjust only what changes daily use.</p>
+      {!config ? <div class="empty-state" role="status">
+        <p>{message || "Loading configuration…"}</p>
+        {message && <button class="button button-primary" type="button" onClick={load}>Try again</button>}
+      </div> : <form onSubmit={save}>
+        <div class="overview" aria-label="Bridge overview">
+          <span><strong>{connected}/{config.speakers.length}</strong> online</span>
+          <span><strong>{visible}</strong> AirPlay destinations</span>
+          <span><strong>{config.groups.length}</strong> groups</span>
         </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          {config.speakers.map((speaker, index) => <SpeakerCard key={speaker.id} speaker={speaker} onChange={(field, value) => update((copy) => { copy.speakers[index][field] = value; })} onPreviewVolume={(volume) => update((copy) => { copy.speakers[index].volume = volume; })} onCommitVolume={(volume) => setVolume(speaker.id, volume)} />)}
-        </div>
-      </section>
 
-      <section>
-        <div class="mb-4 flex items-center justify-between gap-4">
-          <div>
-            <h2 class="text-xl font-bold">Groups</h2>
-            <p class="mt-1 text-sm text-slate-400">Each group appears as one shared AirPlay destination.</p>
+        <section class="collection" aria-labelledby="speakers-title">
+          <div class="section-heading">
+            <div><h2 id="speakers-title">Speakers <span>{config.speakers.length}</span></h2><p>Discovered automatically · Adjust volume directly or expand settings to edit.</p></div>
           </div>
-          <button class={`${buttonClass} shrink-0 bg-cyan-500 text-slate-950 hover:bg-cyan-400`} type="button" onClick={() => update((copy) => copy.groups.push(blankGroup()))}>Add group</button>
-        </div>
-        <div class="space-y-4">
-          {config.groups.map((group, index) => <GroupCard key={group.id} group={group} speakers={config.speakers} onChange={(field, value) => update((copy) => { copy.groups[index][field] = value; })} onToggle={(speakerId) => update((copy) => {
-            const members = copy.groups[index].speaker_ids;
-            copy.groups[index].speaker_ids = members.includes(speakerId) ? members.filter((id) => id !== speakerId) : [...members, speakerId];
-          })} onDelete={() => update((copy) => { copy.groups.splice(index, 1); })} />)}
-          {config.groups.length === 0 && <p class="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">No groups yet.</p>}
-        </div>
-      </section>
+          <div class="device-list">
+            {config.speakers.map((speaker, index) => <SpeakerCard key={speaker.id} speaker={speaker} onChange={(field, value) => update((copy) => { copy.speakers[index][field] = value; })} onPreviewVolume={(volume) => update((copy) => { copy.speakers[index].volume = volume; })} onCommitVolume={(volume) => setVolume(speaker.id, volume)} />)}
+            {config.speakers.length === 0 && <p class="empty-state">No speakers discovered yet. They will appear here when they connect.</p>}
+          </div>
+        </section>
 
-      {message && <p class="rounded-lg border border-cyan-900 bg-cyan-950/60 px-3 py-2 text-sm text-cyan-100">{message}</p>}
-      <button class={`${buttonClass} bg-emerald-400 text-slate-950 hover:bg-emerald-300 disabled:opacity-50`} disabled={saving} type="submit">{saving ? "Saving…" : "Save and restart"}</button>
-    </form>
-  </main>;
+        <section class="collection" aria-labelledby="groups-title">
+          <div class="section-heading">
+            <div><h2 id="groups-title">Groups <span>{config.groups.length}</span></h2><p>One AirPlay destination for multiple speakers.</p></div>
+            <button class="button button-secondary" type="button" onClick={() => { const group = blankGroup(); setNewGroupId(group.id); update((copy) => copy.groups.push(group)); }}>+ Add group</button>
+          </div>
+          <div class="device-list">
+            {config.groups.map((group, index) => <GroupCard key={group.id} group={group} speakers={config.speakers} startOpen={group.id === newGroupId} onChange={(field, value) => update((copy) => { copy.groups[index][field] = value; })} onToggle={(speakerId) => update((copy) => {
+              const members = copy.groups[index].speaker_ids;
+              copy.groups[index].speaker_ids = members.includes(speakerId) ? members.filter((id) => id !== speakerId) : [...members, speakerId];
+            })} onDelete={() => update((copy) => { copy.groups.splice(index, 1); })} />)}
+            {config.groups.length === 0 && <p class="empty-state">No groups yet. Add one to play across rooms.</p>}
+          </div>
+        </section>
+
+        <section class="collection" aria-label="Bridge settings">
+          <details class="settings-card">
+            <summary class="settings-summary"><span><strong>AirPlay name suffix</strong><small>Applies to all speakers and groups</small></span><span class="chevron" aria-hidden="true" /></summary>
+            <div class="device-body"><Text label="Name suffix" value={config.airplay_suffix} onInput={(value) => update((copy) => { copy.airplay_suffix = value; })} /><p class="field-hint">Added to every speaker and group name. Leave blank for no suffix.</p></div>
+          </details>
+        </section>
+
+        <div class="save-bar">
+          <div class="save-copy">Saving restarts the bridge and stops active audio.</div>
+          <div class="save-actions"><p class="save-message" role="status" aria-live="polite">{message}</p><button class="button button-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save & restart"} <span aria-hidden="true">→</span></button></div>
+        </div>
+      </form>}
+    </main>
+  </div>;
 }
 
 function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume }) {
   const connected = Boolean(speaker.connected);
   const volume = Number(speaker.volume ?? 100);
-  return <article class={cardClass}>
-    <div class="mb-5 flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <h3 class="truncate text-lg font-bold">{speaker.airplay_name || speaker.id}</h3>
-        <p class="mt-1 text-sm text-slate-400">Individual speaker</p>
+  const volumeId = `volume-${encodeURIComponent(speaker.id)}`;
+  return <article class="device-card speaker-card">
+    <div class="speaker-row">
+      <div class="speaker-identity">
+        <span class={`connection ${connected ? "is-online" : ""}`}><span class="connection-dot" />{connected ? "Online" : "Offline"}</span>
+        <span class="device-name"><strong>{speaker.airplay_name || speaker.id}</strong><small>{speaker.hidden ? "AirPlay hidden" : "AirPlay visible"} · {speaker.id}</small></span>
       </div>
-      <span class={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${connected ? "bg-emerald-400/15 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>{connected ? "Connected" : "Offline"}</span>
-    </div>
-
-    <div class="grid gap-4 sm:grid-cols-2">
-      <Text label="AirPlay name" value={speaker.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
-      <NumberField label="Group offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
-    </div>
-
-    <div class="mt-5 border-t border-slate-800 pt-4">
-      <div class="flex items-baseline justify-between gap-4">
-        <p class="text-sm font-semibold">Volume</p>
-        <output class="rounded-md bg-slate-800 px-2.5 py-1 text-sm font-bold text-cyan-300">{volume}%</output>
+      <div class="speaker-controls">
+        <div class="volume-area">
+          <label for={volumeId}>Volume <output for={volumeId}>{volume}%</output></label>
+          <input id={volumeId} type="range" min="0" max="100" value={volume} disabled={!connected} onInput={(event) => onPreviewVolume(Number(event.currentTarget.value))} onChange={(event) => onCommitVolume(Number(event.currentTarget.value))} />
+        </div>
+        <Toggle checked={!speaker.hidden} onChange={(visible) => onChange("hidden", !visible)}>AirPlay</Toggle>
       </div>
-      <input class="volume-slider mt-4" type="range" min="0" max="100" value={volume} disabled={!connected} onInput={(event) => onPreviewVolume(Number(event.currentTarget.value))} onChange={(event) => onCommitVolume(Number(event.currentTarget.value))} />
-      <div class="mt-1 flex justify-between text-xs text-slate-500"><span>0</span><span>100</span></div>
     </div>
-
-    <Toggle checked={!speaker.hidden} onChange={(visible) => onChange("hidden", !visible)}>Show as an individual AirPlay speaker</Toggle>
+    <details class="speaker-settings">
+      <summary>Settings <span class="chevron" aria-hidden="true" /></summary>
+      <div class="device-body"><div class="field-grid">
+        <Text label="AirPlay name" value={speaker.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
+        <NumberField label="Group offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
+      </div><p class="field-hint">Group offset: −500 to 500 ms.</p></div>
+    </details>
   </article>;
 }
 
 function Toggle({ checked, onChange, children }) {
-  return <label class="mt-5 flex cursor-pointer items-center gap-3 text-sm font-medium text-slate-200">
+  return <label class="visibility-toggle">
     <input class="peer sr-only" type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
-    <span aria-hidden="true" class="relative h-6 w-11 shrink-0 rounded-full bg-slate-700 transition after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-cyan-500 peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-slate-900" />
+    <span aria-hidden="true" class="toggle-track" />
     <span>{children}</span>
   </label>;
 }
 
-function GroupCard({ group, speakers, onChange, onToggle, onDelete }) {
-  return <article class={cardClass}>
-    <div class="mb-4 flex items-center justify-between gap-4">
-      <div><h3 class="font-bold">{group.airplay_name || group.id}</h3><p class="mt-1 text-sm text-slate-400">Shared AirPlay destination</p></div>
-      <button class="text-sm font-semibold text-rose-300 hover:text-rose-200" type="button" onClick={onDelete}>Remove</button>
+function GroupCard({ group, speakers, startOpen, onChange, onToggle, onDelete }) {
+  const members = group.speaker_ids.map((id) => speakers.find((speaker) => speaker.id === id)?.airplay_name || id).join(", ");
+  return <details class="device-card" open={startOpen}>
+    <summary class="device-summary">
+      <span class="device-name"><strong>{group.airplay_name || group.id}</strong><small>{members || "No speakers selected"}</small></span>
+      <span class="member-count">{group.speaker_ids.length} {group.speaker_ids.length === 1 ? "speaker" : "speakers"}</span>
+      <span class="chevron" aria-hidden="true" />
+    </summary>
+    <div class="device-body">
+      <Text label="AirPlay name" value={group.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
+      <fieldset class="member-field"><legend>Included speakers</legend>
+        <div class="member-list">{speakers.map((speaker) => {
+          const included = group.speaker_ids.includes(speaker.id);
+          return <button class={`member-chip ${included ? "is-selected" : ""}`} type="button" aria-pressed={included} key={speaker.id} onClick={() => onToggle(speaker.id)}><span aria-hidden="true">{included ? "✓" : "+"}</span>{speaker.airplay_name || speaker.id}</button>;
+        })}</div>
+        {speakers.length === 0 && <p class="field-hint">No speakers discovered yet.</p>}
+      </fieldset>
+      <div class="group-actions"><button class="remove-button" type="button" onClick={onDelete}>Remove group</button></div>
     </div>
-    <Text label="AirPlay name" value={group.airplay_name} onInput={(value) => onChange("airplay_name", value)} />
-    <fieldset class="mt-5">
-      <legend class="text-xs font-medium text-slate-300">Included speakers</legend>
-      <div class="mt-2 flex flex-wrap gap-2">{speakers.map((speaker) => {
-        const included = group.speaker_ids.includes(speaker.id);
-        return <button class={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${included ? "border-cyan-400/70 bg-cyan-400/10 text-cyan-200" : "border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-200"}`} type="button" aria-pressed={included} key={speaker.id} onClick={() => onToggle(speaker.id)}><span class={`grid h-4 w-4 place-items-center rounded-full text-xs ${included ? "bg-cyan-400 text-slate-950" : "bg-slate-800 text-slate-500"}`}>{included ? "✓" : "+"}</span>{speaker.airplay_name || speaker.id}</button>;
-      })}</div>
-    </fieldset>
-  </article>;
+  </details>;
 }
 
 function Text({ label, value, onInput }) {
-  return <label>{label}<input class={inputClass} value={value ?? ""} onInput={(event) => onInput(event.currentTarget.value)} /></label>;
+  return <label class="field">{label}<input value={value ?? ""} onInput={(event) => onInput(event.currentTarget.value)} /></label>;
 }
 
 function NumberField({ label, value, onInput, min, max }) {
-  return <label>{label}<input class={inputClass} type="number" min={min} max={max} value={value ?? ""} onInput={(event) => onInput(event.currentTarget.value)} /></label>;
+  return <label class="field">{label}<input type="number" min={min} max={max} value={value ?? ""} onInput={(event) => onInput(event.currentTarget.value)} /></label>;
 }
 
 render(<App />, document.getElementById("app"));

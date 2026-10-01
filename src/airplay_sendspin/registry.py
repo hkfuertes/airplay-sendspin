@@ -1,4 +1,4 @@
-"""Persistent, hand-editable AirPlay Sendspin registry."""
+"""Persistent, hand-editable Sendspin Bridge registry."""
 
 from __future__ import annotations
 

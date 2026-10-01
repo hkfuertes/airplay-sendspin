@@ -1,4 +1,4 @@
-# Spec: puente AirPlay 1 → Sendspin (Python)
+# Spec: Sendspin Bridge — puente AirPlay 1 → Sendspin (Python)
 
 ## Objetivo
 

@@ -1,4 +1,4 @@
-# AirPlay Sendspin
+# Sendspin Bridge
 
 AirPlay 1 targets for Sendspin speakers and groups. By default, every
 discovered speaker gets its own target; set `hidden="true"` to reserve it for
@@ -10,7 +10,7 @@ it directly to that speaker's Sendspin session.
 ```sh
 git clone https://github.com/hkfuertes/airplay-sendspin.git
 cd airplay-sendspin
-docker build --target runtime -t airplay-sendspin:latest .
+docker build --target runtime -t sendspin-bridge:latest .
 docker compose up -d
 # The image build compiles the libraop CFFI extension and runs Python tests.
 ```
@@ -19,7 +19,7 @@ Host networking is required for mDNS and AirPlay discovery.
 
 ## Visual configuration
 
-The bridge serves its internal editor on port `8080`; open
+Sendspin Bridge serves its single-page editor on port `8080`; open
 `http://192.168.1.10:8080/` to edit speaker names, visibility, signed group
 offsets, groups, and the live volume of connected speakers. Volume is not
 persisted. Discovery-managed IDs, ports, connection direction, and endpoints
@@ -33,13 +33,15 @@ restart. Use `-web-host` and `-web-port` to change the listener.
 ## Home Assistant add-on
 
 Add this repository under Settings → Add-ons → Add-on store → Repositories,
-then install **AirPlay Sendspin**. Bump `airplay-sendspin/config.yaml`'s
+then install **Sendspin Bridge**. Bump `airplay-sendspin/config.yaml`'s
 `version` and merge it to `main` to publish matching native amd64 and aarch64
 images; the workflow builds one architecture at a time. Home Assistant pulls
 the image tag with that version. As speakers are discovered, the bridge writes
 `config.xml` in the add-on's config folder. The repository and its GHCR packages
 must be public (or the registry added to Supervisor) for Home Assistant to fetch
-them.
+them. The add-on slug and folder remain `airplay_sendspin` for existing installs;
+`config.xml` keeps its `<airplay-sendspin>` root so existing settings load without
+migration. The GitHub URL still uses the current repository name.
 
 ## `state/config.xml`
 

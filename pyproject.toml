@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "cffi>=1.17"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "airplay-sendspin"
+name = "sendspin-bridge"
 version = "0.2.0.dev0"
 description = "AirPlay 1 targets for Sendspin speakers"
 requires-python = ">=3.12"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-airplay-sendspin = "airplay_sendspin.__main__:main"
+sendspin-bridge = "airplay_sendspin.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

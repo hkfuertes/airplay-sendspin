@@ -39,7 +39,7 @@ class Config:
     port_range: int = 10
     config_path: str = "config.xml"
     server_port: int = 8927
-    server_name: str = "AirPlay Sendspin"
+    server_name: str = "Sendspin Bridge"
     web_host: str = "0.0.0.0"
     web_port: int = 8080
 
@@ -310,7 +310,7 @@ class Manager:
                     retry_initial_connection=True,
                     retry_indefinitely=True,
                 )
-        self.audio_task = asyncio.create_task(self._pump_audio(), name="airplay-sendspin-audio")
+        self.audio_task = asyncio.create_task(self._pump_audio(), name="sendspin-bridge-audio")
         LOG.info("Sendspin server listening on %s:%d", self.address, self.config.server_port)
 
     async def close(self) -> None:

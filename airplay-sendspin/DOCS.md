@@ -1,4 +1,4 @@
-# AirPlay Sendspin
+# Sendspin Bridge
 
 By default, each discovered Sendspin speaker is advertised as an AirPlay target.
 You can also define AirPlay groups that play through several speakers in sync.
@@ -6,7 +6,8 @@ You can also define AirPlay groups that play through several speakers in sync.
 The bridge writes discovered speakers to `config.xml` in this add-on's config
 folder. For a GitHub repository, Supervisor mounts that folder at
 `/addon_configs/<repository-id>_airplay_sendspin/` in File editor or Samba,
-and at `/config` inside this add-on. Edit `config.xml` to rename targets, change
+and at `/config` inside this add-on. The legacy slug is kept so existing
+installations retain their settings. Edit `config.xml` to rename targets, change
 the shared suffix (`airplay_suffix`), or add `<groups>`, then restart the
 add-on. Prefer the internal visual editor at port 8080; saving there restarts
 the bridge automatically. Its per-speaker volume control is live only and is

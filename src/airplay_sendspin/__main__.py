@@ -16,7 +16,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-port-range", type=int, default=10, help="ports reserved per AirPlay target")
     result.add_argument("-config", default="config.xml", help="persistent speaker registry")
     result.add_argument("-server-port", type=int, default=8927, help="inbound Sendspin server port")
-    result.add_argument("-server-name", default="AirPlay Sendspin", help="inbound Sendspin server name")
+    result.add_argument("-server-name", default="Sendspin Bridge", help="inbound Sendspin server name")
     result.add_argument("-web-host", default="0.0.0.0", help="configuration UI listen address")
     result.add_argument("-web-port", type=int, default=8080, help="configuration UI port")
     return result
