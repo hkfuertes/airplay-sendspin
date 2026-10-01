@@ -48,8 +48,11 @@ RUN LIBRAOP_ROOT=/src/third_party/libraop python -m pip install --no-cache-dir -
 
 FROM python:3.13-slim-bookworm AS runtime
 
+# Pillow builds from source on arm/v7 and links against the build image's codecs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libatomic1 \
+    liblcms2-2 \
+    libopenjp2-7 \
     libstdc++6 \
     libtiff6 \
  && rm -rf /var/lib/apt/lists/*
