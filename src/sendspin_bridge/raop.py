@@ -58,6 +58,10 @@ class Receiver:
         event = int(self._lib.bridge_receiver_read_event(self._receiver, volume))
         return (event, float(volume[0])) if event else None
 
+    def notify_volume(self, volume: float) -> None:
+        if self._receiver != self._ffi.NULL:
+            self._lib.bridge_receiver_notify_volume(self._receiver, volume)
+
     def close(self) -> None:
         receiver = getattr(self, "_receiver", None)
         if receiver is not None and receiver != self._ffi.NULL:

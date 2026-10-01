@@ -54,6 +54,8 @@ class AirPlayInput:
         self.port_base = port
         self.receiver: Receiver | None = None
         self.advertiser: Advertiser | None = None
+        self._next_volume: int | None = None
+        self._volume_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         mac = virtual_mac(self.key)
@@ -89,10 +91,29 @@ class AirPlayInput:
         while event := self.receiver.read_event():
             yield event
 
+    def send_volume(self, volume: int) -> None:
+        if self.receiver is None:
+            return
+        self._next_volume = volume
+        if self._volume_task is None or self._volume_task.done():
+            self._volume_task = asyncio.create_task(self._send_volume(), name=f"airplay-volume-{self.key}")
+
+    async def _send_volume(self) -> None:
+        while self._next_volume is not None:
+            volume, self._next_volume = self._next_volume, None
+            try:
+                # ponytail: DACP is best-effort; serialize/coalesce updates so slow remotes cannot stall playback.
+                await asyncio.to_thread(self.receiver.notify_volume, volume / 100)
+            except Exception:
+                LOG.exception("AirPlay volume feedback failed for %s", self.name)
+
     async def close(self) -> None:
         if self.advertiser is not None:
             await self.advertiser.close()
             self.advertiser = None
+        if self._volume_task is not None:
+            await self._volume_task
+            self._volume_task = None
         if self.receiver is not None:
             self.receiver.close()
             self.receiver = None
@@ -347,19 +368,25 @@ class Manager:
         if target is None or target.player is None:
             return None
         target.set_volume(volume)
+        if target.playing and target.input is not None:
+            target.input.send_volume(target.volume)
         return target.volume
 
     def request_restart(self) -> None:
         LOG.info("Restarting bridge to apply configuration changes")
         self.restart_requested.set()
 
-    def set_group_volume(self, speaker_ids: list[str], volume: int) -> dict[str, int]:
+    def set_group_volume(self, speaker_ids: list[str], volume: int, group_id: str | None = None) -> dict[str, int]:
         targets = [(speaker_id, self.targets[speaker_id]) for speaker_id in speaker_ids if speaker_id in self.targets and self.targets[speaker_id].player]
         levels = [float(target.volume) for _, target in targets]
         _spread_volume(levels, float(volume))
         for (_, target), level in zip(targets, levels, strict=True):
             target.set_volume(round(level))
-        return {speaker_id: target.volume for speaker_id, target in targets}
+        updated = {speaker_id: target.volume for speaker_id, target in targets}
+        group = self.group_targets.get(group_id) if group_id is not None else None
+        if group is not None and group.active and updated:
+            group.input.send_volume(round(sum(updated.values()) / len(updated)))
+        return updated
 
     def _on_server_event(self, _server: SendspinServer, event) -> None:
         if isinstance(event, (ClientAddedEvent, ClientConnectedEvent, ClientUpdatedEvent)):

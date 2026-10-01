@@ -34,7 +34,7 @@ class ConfigWeb:
         registry: Callable[[], Registry],
         speaker_state: Callable[[str], dict],
         set_speaker_volume: Callable[[str, int], int | None],
-        set_group_volume: Callable[[list[str], int], dict[str, int]],
+        set_group_volume: Callable[[list[str], int, str], dict[str, int]],
         replace_registry: Callable[[Registry], None],
         restart: Callable[[], None],
     ) -> None:
@@ -140,7 +140,7 @@ class ConfigWeb:
             return web.json_response({"error": "group not found; save and restart first"}, status=404)
         if group.speaker_ids != members:
             return web.json_response({"error": "group members changed; save and restart first"}, status=409)
-        updated = self._set_group_volume(group.speaker_ids, volume)
+        updated = self._set_group_volume(group.speaker_ids, volume, group.id)
         if not updated:
             return web.json_response({"error": "no connected speakers in group"}, status=409)
         return web.json_response({"volume": round(sum(updated.values()) / len(updated)), "speakers": updated})

@@ -95,7 +95,10 @@ source is checked in.
   own; unexposed members are not advertised but remain connected to feed groups.
   If a speaker's own target and one of its groups play at once, the speaker
   mixes both. Group volume moves the members' average and keeps their
-  differences; at 0 or 100 every member ends up equal.
+  differences; at 0 or 100 every member ends up equal. During playback,
+  dashboard volume changes are reported to the AirPlay sender via DACP when
+  available: one level for the active individual target or group, never its
+  members separately. AirPlay senders without DACP cannot receive updates.
 
 ## AI-assisted development
 
