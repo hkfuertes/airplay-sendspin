@@ -34,6 +34,7 @@ class ConfigWeb:
         registry: Callable[[], Registry],
         speaker_state: Callable[[str], dict],
         set_speaker_volume: Callable[[str, int], int | None],
+        set_group_volume: Callable[[list[str], int], dict[str, int]],
         replace_registry: Callable[[Registry], None],
         restart: Callable[[], None],
     ) -> None:
@@ -46,6 +47,7 @@ class ConfigWeb:
         self._registry = registry
         self._speaker_state = speaker_state
         self._set_speaker_volume = set_speaker_volume
+        self._set_group_volume = set_group_volume
         self._replace_registry = replace_registry
         self._restart = restart
         self._token = CONFIG_TOKEN
@@ -67,6 +69,7 @@ class ConfigWeb:
         app.router.add_get("/api/config", self._get_config)
         app.router.add_put("/api/config", self._put_config)
         app.router.add_put("/api/speakers/{speaker_id}/volume", self._put_volume)
+        app.router.add_put("/api/groups/{group_id}/volume", self._put_group_volume)
         app.router.add_static("/", static_root, show_index=False)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -122,6 +125,25 @@ class ConfigWeb:
         if updated is None:
             return web.json_response({"error": "speaker is not connected"}, status=409)
         return web.json_response({"volume": updated})
+
+    async def _put_group_volume(self, request: web.Request) -> web.Response:
+        try:
+            payload = _object(await request.json(), "request")
+            volume = _integer(payload.get("volume"), "volume", 0, 100)
+            members = payload.get("speaker_ids")
+            if not isinstance(members, list) or not all(isinstance(member, str) for member in members):
+                raise ValueError("speaker_ids must be an array of speaker IDs")
+        except (ValueError, json.JSONDecodeError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+        group = next((group for group in self._registry().groups() if group.id == request.match_info["group_id"]), None)
+        if group is None:
+            return web.json_response({"error": "group not found; save and restart first"}, status=404)
+        if group.speaker_ids != members:
+            return web.json_response({"error": "group members changed; save and restart first"}, status=409)
+        updated = self._set_group_volume(group.speaker_ids, volume)
+        if not updated:
+            return web.json_response({"error": "no connected speakers in group"}, status=409)
+        return web.json_response({"volume": round(sum(updated.values()) / len(updated)), "speakers": updated})
 
     def _payload(self) -> dict:
         payload = registry_to_payload(self._registry())
