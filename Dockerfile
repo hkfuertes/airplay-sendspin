@@ -55,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenjp2-7 \
     libstdc++6 \
     libtiff6 \
+    libxcb1 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /install /usr/local
