@@ -40,6 +40,8 @@ COPY pyproject.toml setup.py build_raop.py ./
 COPY src ./src
 COPY --from=web-build /out ./src/sendspin_bridge/web
 COPY tests ./tests
+# QEMU on ARM64 can report the host architecture; CFFI needs the requested target.
+ARG TARGETARCH
 RUN LIBRAOP_ROOT=/src/third_party/libraop python -m pip install --no-cache-dir --prefix=/install . \
  && PYTHONPATH=/src/src:/install/lib/python3.13/site-packages python -m unittest discover -s tests -v \
  && PYTHONPATH=/install/lib/python3.13/site-packages python -c 'from sendspin_bridge import _raop; assert _raop.lib.bridge_receiver_port == _raop.lib.bridge_receiver_port'
