@@ -84,7 +84,7 @@ class GroupVolumeTests(unittest.IsolatedAsyncioTestCase):
         response = await config._put_group_volume(request)
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.body), {"volume": 50, "speakers": {"kitchen": 30, "bedroom": 70}})
-        set_volume.assert_called_once_with(["kitchen", "bedroom"], 50)
+        set_volume.assert_called_once_with(["kitchen", "bedroom"], 50, "home")
 
         request.json.return_value = {"volume": 50, "speaker_ids": ["kitchen"]}
         self.assertEqual((await config._put_group_volume(request)).status, 409)

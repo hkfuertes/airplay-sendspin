@@ -17,6 +17,7 @@ void bridge_receiver_delete(bridge_receiver_t *receiver);
 uint16_t bridge_receiver_port(const bridge_receiver_t *receiver);
 size_t bridge_receiver_read_pcm(bridge_receiver_t *receiver, int16_t *dst, size_t capacity_frames);
 int bridge_receiver_read_event(bridge_receiver_t *receiver, double *volume);
+void bridge_receiver_notify_volume(bridge_receiver_t *receiver, double volume);
 """)
 
 root = Path(os.environ.get("LIBRAOP_ROOT", "third_party/libraop")).resolve()

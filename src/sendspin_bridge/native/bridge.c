@@ -168,6 +168,10 @@ size_t bridge_receiver_read_pcm(bridge_receiver_t *receiver, int16_t *dst, size_
 	return count / 2;
 }
 
+void bridge_receiver_notify_volume(bridge_receiver_t *receiver, double volume) {
+	if (receiver && receiver->server) raopsr_notify(receiver->server, RAOP_VOLUME, &volume);
+}
+
 int bridge_receiver_read_event(bridge_receiver_t *receiver, double *volume) {
 	bridge_event_t event;
 	if (!receiver) return 0;
