@@ -78,6 +78,21 @@ function App() {
     }
   };
 
+  const setGroupVolume = async (group, volume) => {
+    try {
+      const result = await api(`/api/groups/${encodeURIComponent(group.id)}/volume`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ volume, speaker_ids: group.speaker_ids }),
+      });
+      update((copy) => copy.speakers.forEach((speaker) => {
+        if (result.speakers[speaker.id] !== undefined) speaker.volume = result.speakers[speaker.id];
+      }));
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
   const save = async (event) => {
     event.preventDefault();
     setSaving(true);
@@ -166,7 +181,7 @@ function App() {
             {config.groups.map((group, index) => <GroupCard key={group.id} group={group} speakers={config.speakers} startOpen={group.id === newGroupId} onChange={(field, value) => update((copy) => { copy.groups[index][field] = value; })} onToggle={(speakerId) => update((copy) => {
               const members = copy.groups[index].speaker_ids;
               copy.groups[index].speaker_ids = members.includes(speakerId) ? members.filter((id) => id !== speakerId) : [...members, speakerId];
-            })} onDelete={() => update((copy) => { copy.groups.splice(index, 1); })} />)}
+            })} onCommitVolume={(volume) => setGroupVolume(group, volume)} onDelete={() => update((copy) => { copy.groups.splice(index, 1); })} />)}
             {config.groups.length === 0 && <p class={emptyClass}>No groups yet. Add one to play across rooms.</p>}
           </div>
         </section>
@@ -214,15 +229,23 @@ function Toggle({ checked, onChange, children }) {
   </label>;
 }
 
-function GroupCard({ group, speakers, startOpen, onChange, onToggle, onDelete }) {
+function GroupCard({ group, speakers, startOpen, onChange, onToggle, onCommitVolume, onDelete }) {
   const members = group.speaker_ids.map((id) => speakers.find((speaker) => speaker.id === id)?.exposed_name || id).join(", ");
-  return <details class={`${cardClass} group device-card`} open={startOpen}>
-    <summary class="flex min-h-[66px] cursor-pointer list-none items-center gap-3 px-[17px] py-3 hover:bg-[#21333a] [&::-webkit-details-marker]:hidden">
-      <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{group.exposed_name || group.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{members || "No speakers selected"}</small></span>
-      <span class="whitespace-nowrap text-xs text-muted">{group.speaker_ids.length} {group.speaker_ids.length === 1 ? "speaker" : "speakers"}</span>
-      <span class={`${chevronClass} mb-1 ml-2 mr-[3px]`} aria-hidden="true" />
-    </summary>
-    <div class="grid gap-4 border-t border-line p-[17px]">
+  const connected = speakers.filter((speaker) => speaker.connected && group.speaker_ids.includes(speaker.id));
+  const volume = connected.length ? Math.round(connected.reduce((sum, speaker) => sum + Number(speaker.volume ?? 100), 0) / connected.length) : 0;
+  const [previewVolume, setPreviewVolume] = useState(null);
+  const volumeId = `volume-group-${encodeURIComponent(group.id)}`;
+  return <article class={cardClass}>
+    <div class="flex min-h-[66px] flex-wrap items-center gap-x-[18px] gap-y-3 px-[17px] py-3 max-sm:gap-y-2">
+      <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{group.exposed_name || group.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{members || "No speakers selected"} · {group.speaker_ids.length} {group.speaker_ids.length === 1 ? "speaker" : "speakers"}</small></span>
+      <div class="w-[170px] max-sm:w-full">
+        <label class="mb-0.5 flex justify-between text-[11px] text-muted" for={volumeId}>Group volume <output class="font-semibold text-ink" for={volumeId}>{previewVolume ?? volume}%</output></label>
+        <input class="m-0 w-full cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-45" id={volumeId} type="range" min="0" max="100" value={previewVolume ?? volume} disabled={!connected.length || !group.port} onInput={(event) => setPreviewVolume(Number(event.currentTarget.value))} onChange={async (event) => { await onCommitVolume(Number(event.currentTarget.value)); setPreviewVolume(null); }} />
+      </div>
+    </div>
+    <details class="group border-t border-line" open={startOpen}>
+      <summary class="flex w-fit cursor-pointer list-none items-center gap-1 px-[17px] py-[7px] text-xs text-[#bdd9cf] hover:bg-[#21333a] [&::-webkit-details-marker]:hidden">Settings <span class={`${chevronClass} ml-1 size-1.5`} aria-hidden="true" /></summary>
+      <div class="grid gap-4 border-t border-line p-[17px]">
       <Text label="Exposed name" value={group.exposed_name} onInput={(value) => onChange("exposed_name", value)} />
       <fieldset class="m-0 min-w-0 border-0 p-0"><legend class="p-0 text-xs font-semibold text-[#d1e1de]">Included speakers</legend>
         <div class="mt-2.5 flex flex-wrap gap-[7px]">{speakers.map((speaker) => {
@@ -232,8 +255,9 @@ function GroupCard({ group, speakers, startOpen, onChange, onToggle, onDelete })
         {speakers.length === 0 && <p class="m-0 text-xs leading-normal text-muted">No speakers discovered yet.</p>}
       </fieldset>
       <div class="border-t border-line pt-3"><button class="p-0 text-xs text-[#ffbdb4] hover:underline" type="button" onClick={onDelete}>Remove group</button></div>
-    </div>
-  </details>;
+      </div>
+    </details>
+  </article>;
 }
 
 function Text({ label, value, onInput }) {

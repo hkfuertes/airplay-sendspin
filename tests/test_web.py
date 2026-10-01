@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
-from sendspin_bridge.registry import Registry
-from sendspin_bridge.web import registry_from_payload, registry_to_payload
+from sendspin_bridge.registry import Group, Registry, Speaker
+from sendspin_bridge.web import ConfigWeb, registry_from_payload, registry_to_payload
 
 
 class ConfigPayloadTests(unittest.TestCase):
@@ -64,6 +66,35 @@ class ConfigPayloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "unknown"):
                 registry_from_payload(payload, str(Path(directory) / "config.xml"), 7000, 10)
+
+
+class GroupVolumeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_group_volume_validates_members_and_returns_live_levels(self) -> None:
+        group = Group(id="home", speaker_ids=["kitchen", "bedroom"])
+        set_volume = Mock(return_value={"kitchen": 30, "bedroom": 70})
+        config = ConfigWeb(
+            config_path="/tmp/unused.xml", port_base=7000, port_range=10,
+            host="127.0.0.1", port=8080, advertised_host="127.0.0.1",
+            registry=lambda: Registry(speakers=[Speaker(id="kitchen"), Speaker(id="bedroom")], groups=[group]),
+            speaker_state=lambda _: {}, set_speaker_volume=Mock(), set_group_volume=set_volume,
+            replace_registry=Mock(), restart=Mock(),
+        )
+        request = Mock(match_info={"group_id": "home"})
+        request.json = AsyncMock(return_value={"volume": 50, "speaker_ids": ["kitchen", "bedroom"]})
+        response = await config._put_group_volume(request)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.body), {"volume": 50, "speakers": {"kitchen": 30, "bedroom": 70}})
+        set_volume.assert_called_once_with(["kitchen", "bedroom"], 50)
+
+        request.json.return_value = {"volume": 50, "speaker_ids": ["kitchen"]}
+        self.assertEqual((await config._put_group_volume(request)).status, 409)
+        request.json.return_value = {"volume": 101, "speaker_ids": ["kitchen", "bedroom"]}
+        self.assertEqual((await config._put_group_volume(request)).status, 400)
+        set_volume.assert_called_once()
+
+        request.json.return_value = {"volume": 50, "speaker_ids": ["kitchen", "bedroom"]}
+        set_volume.return_value = {}
+        self.assertEqual((await config._put_group_volume(request)).status, 409)
 
 
 if __name__ == "__main__":

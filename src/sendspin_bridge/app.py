@@ -290,6 +290,7 @@ class Manager:
             registry=lambda: self.registry,
             speaker_state=self.speaker_state,
             set_speaker_volume=self.set_speaker_volume,
+            set_group_volume=self.set_group_volume,
             replace_registry=self.replace_registry,
             restart=self.request_restart,
         )
@@ -352,12 +353,13 @@ class Manager:
         LOG.info("Restarting bridge to apply configuration changes")
         self.restart_requested.set()
 
-    def set_group_volume(self, speaker_ids: list[str], volume: int) -> None:
-        targets = [self.targets[speaker_id] for speaker_id in speaker_ids if speaker_id in self.targets and self.targets[speaker_id].player]
-        levels = [float(target.volume) for target in targets]
+    def set_group_volume(self, speaker_ids: list[str], volume: int) -> dict[str, int]:
+        targets = [(speaker_id, self.targets[speaker_id]) for speaker_id in speaker_ids if speaker_id in self.targets and self.targets[speaker_id].player]
+        levels = [float(target.volume) for _, target in targets]
         _spread_volume(levels, float(volume))
-        for target, level in zip(targets, levels, strict=True):
+        for (_, target), level in zip(targets, levels, strict=True):
             target.set_volume(round(level))
+        return {speaker_id: target.volume for speaker_id, target in targets}
 
     def _on_server_event(self, _server: SendspinServer, event) -> None:
         if isinstance(event, (ClientAddedEvent, ClientConnectedEvent, ClientUpdatedEvent)):
@@ -391,7 +393,8 @@ class Manager:
         target = self.targets.get(speaker.id)
         if target is not None:
             return target
-        target = Target(self, speaker, self.member_groups.get(speaker.id, []))
+        # Keep the list shared: inbound players can connect before groups finish starting.
+        target = Target(self, speaker, self.member_groups.setdefault(speaker.id, []))
         self.targets[speaker.id] = target
         try:
             await target.start()
