@@ -108,6 +108,10 @@ function App() {
         <span class="brand-mark" aria-hidden="true"><span /><span /><span /><span /></span>
         <span>Sendspin<span class="brand-light"> Bridge</span></span>
       </div>
+      <label class="suffix-field" title="Added to every speaker and group name">
+        <span>Suffix</span>
+        <input type="text" form="config-form" placeholder="Suffix" value={config?.airplay_suffix ?? ""} disabled={!config || saving} onInput={(event) => { const value = event.currentTarget.value; update((copy) => { copy.airplay_suffix = value; }); }} />
+      </label>
       <div class="header-actions">
         <p class="header-message" role="status" aria-live="polite">{config ? message : ""}</p>
         <span class="save-warning" id="save-warning">Stops playback</span>
@@ -146,12 +150,6 @@ function App() {
           </div>
         </section>
 
-        <section class="collection" aria-label="Bridge settings">
-          <details class="settings-card">
-            <summary class="settings-summary"><span><strong>AirPlay name suffix</strong><small>Applies to all speakers and groups</small></span><span class="chevron" aria-hidden="true" /></summary>
-            <div class="device-body"><Text label="Name suffix" value={config.airplay_suffix} onInput={(value) => update((copy) => { copy.airplay_suffix = value; })} /><p class="field-hint">Added to every speaker and group name. Leave blank for no suffix.</p></div>
-          </details>
-        </section>
       </form>}
     </main>
   </div>;
