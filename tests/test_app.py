@@ -195,6 +195,29 @@ class SpotifyRoutingTests(unittest.TestCase):
         self.assertTrue(np.all(np.frombuffer(exposed.render(2), dtype="<i2") == 250))
 
 
+class SpotifyNameTests(unittest.TestCase):
+    def test_names_are_unique_stable_and_fit_one_mdns_label(self) -> None:
+        from sendspin_bridge.app import _spotify_names
+
+        long = "Ñ" * 40  # 80 UTF-8 bytes.
+        registry = Registry(
+            speakers=[Speaker(id="a", exposed_name="Echo"), Speaker(id="b", exposed_name="Echo"),
+                      Speaker(id="hidden", exposed_name="Echo", exposed=False), Speaker(id="l", exposed_name="L"),
+                      Speaker(id="r", exposed_name="R"), Speaker(id="long", exposed_name=long)],
+            stereos=[Stereo("pair", "l", "r", exposed_name="Echo")],
+        )
+        names = _spotify_names(registry)
+        suffix = registry.exposed_suffix
+        self.assertEqual(names["stereo:pair"], "Echo" + suffix)
+        self.assertEqual(names["a"], "Echo" + suffix + " 2")
+        self.assertEqual(names["b"], "Echo" + suffix + " 3")
+        self.assertNotIn("hidden", names)
+        self.assertNotIn("l", names)
+        self.assertLessEqual(len(names["long"].encode()), 62)
+        self.assertTrue(names["long"].startswith("Ñ"))
+        self.assertEqual(names, _spotify_names(registry))
+
+
 class SpotifyNoSpeakerTests(unittest.IsolatedAsyncioTestCase):
     async def test_undiscovered_group_does_not_block_spotify_pipe(self) -> None:
         manager = object.__new__(Manager)

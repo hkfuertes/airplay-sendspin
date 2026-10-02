@@ -25,8 +25,10 @@ A Spotify Connect target is advertised alongside each exposed unpaired speaker,
 stereo pair and group. Both AirPlay and Spotify remain available. When multiple
 inputs play to a speaker, the last one to start wins for that speaker; if it
 stops, the previous active input resumes. Stereo routing, group membership
-and per-speaker sync offsets apply to both protocols. Target names include their stable config ID to keep
-Spotify device identities distinct. A **Spotify Premium** account is required.
+and per-speaker sync offsets apply to both protocols. Spotify names match the
+AirPlay names; librespot derives the Connect identity from the name, so duplicate
+names get a numeric suffix (` 2`) and names are capped at 62 bytes for mDNS.
+A **Spotify Premium** account is required.
 Select the destination in Spotify on the trusted LAN; librespot stores reusable
 credentials under `state/spotify/` (or next to `config.xml` in the add-on), in
 private per-target directories. Do not expose the Spotify pairing ports or the

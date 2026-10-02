@@ -57,7 +57,7 @@ class SpotifyInput:
         env["SENDSPIN_EVENT_FIFO"] = fifo_path
         try:
             self.process = await asyncio.create_subprocess_exec(
-                self.binary, "--name", f"{self.name} [{self.key}]", "--backend", "pipe",
+                self.binary, "--name", self.name, "--backend", "pipe",
                 "--format", "S16", "--initial-volume", "100", "--system-cache", str(cache),
                 "--zeroconf-interface", self.address,
                 "--onevent", str(Path(__file__).with_name("spotify_event.sh")), "--quiet",

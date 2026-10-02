@@ -582,10 +582,31 @@ def _spotify_input(manager: Manager, key: str, name: str) -> SpotifyInput | None
     binary = getattr(manager, "spotify_binary", None)
     if not isinstance(binary, str):
         return None
-    return SpotifyInput(
-        binary, key, name + manager.registry.exposed_suffix,
-        Path(manager.config.config_path).parent, manager.address,
-    )
+    name = _spotify_names(manager.registry).get(key, _mdns_label(name + manager.registry.exposed_suffix))
+    return SpotifyInput(binary, key, name, Path(manager.config.config_path).parent, manager.address)
+
+
+def _spotify_names(registry: Registry) -> dict[str, str]:
+    """librespot derives the Connect device ID from its name: keep names unique, stable and mDNS-safe."""
+    paired = {member for pair in registry.stereos() for member in (pair.left_id, pair.right_id)}
+    targets = [(f"group:{group.id}", group.exposed_name) for group in registry.groups()]
+    targets += [(f"stereo:{pair.id}", pair.exposed_name) for pair in registry.stereos()]
+    targets += [(speaker.id, speaker.exposed_name) for speaker in registry.speakers()
+                if speaker.exposed and speaker.id not in paired]
+    names: dict[str, str] = {}
+    for key, name in targets:
+        name += registry.exposed_suffix
+        candidate, count = _mdns_label(name), 1
+        while candidate in names.values():
+            count += 1
+            candidate = _mdns_label(name, f" {count}")
+        names[key] = candidate
+    return names
+
+
+def _mdns_label(name: str, tag: str = "") -> str:
+    # libmdns panics unless the advertised name fits one DNS label (< 63 bytes).
+    return name.encode()[:62 - len(tag.encode())].decode(errors="ignore") + tag
 
 
 def _volume_percent(volume: float) -> int:
