@@ -27,10 +27,13 @@ class FakeTarget:
 
 
 class ManagerVolumeTests(unittest.TestCase):
-    def test_only_exposed_speakers_get_an_input(self) -> None:
+    def test_only_unpaired_exposed_speakers_get_an_input(self) -> None:
         manager = object.__new__(Manager)
         self.assertIsNone(Target(manager, Speaker(id="kitchen", exposed=False), []).input)
         self.assertIsNotNone(Target(manager, Speaker(id="bedroom", exposed=True), []).input)
+        speaker = Speaker(id="left", exposed=True)
+        self.assertIsNone(Target(manager, speaker, [], paired=True).input)
+        self.assertTrue(speaker.exposed)  # Unpairing restores the saved preference.
 
     def test_individual_volume_is_live_only(self) -> None:
         manager = object.__new__(Manager)
@@ -162,10 +165,28 @@ class VolumeFeedbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ManagerStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unpairing_restores_only_previously_exposed_individual_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager = Manager(Config(config_path=f"{temp}/config.xml"))
+            left, right = Speaker(id="left", exposed=True), Speaker(id="right", exposed=False)
+            manager.registry = Registry(speakers=[left, right], stereos=[Stereo("pair", "left", "right")])
+            with patch.object(AirPlayInput, "start", new_callable=AsyncMock):
+                paired = await manager._ensure_target(left)
+                self.assertIsNone(paired.input)
+                await paired.close()
+                manager.targets.clear()
+                manager.registry = Registry(speakers=[left, right])
+                unpaired = await manager._ensure_target(left)
+                hidden = await manager._ensure_target(right)
+                self.assertIsNotNone(unpaired.input)
+                self.assertIsNone(hidden.input)
+                await unpaired.close()
+                await hidden.close()
+
     async def test_early_inbound_player_joins_stereo_and_multiroom(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager = Manager(Config(config_path=f"{temp}/config.xml"))
-            speaker = Speaker(id="left", direction=INBOUND, exposed=False)
+            speaker = Speaker(id="left", direction=INBOUND, exposed=True)
             other = Speaker(id="right", direction=INBOUND, exposed=False)
             manager.registry = Registry(
                 speakers=[speaker, other], stereos=[Stereo("pair", "left", "right")],
@@ -190,6 +211,7 @@ class ManagerStartupTests(unittest.IsolatedAsyncioTestCase):
                     await manager.start()
                     manager.stereo_targets["pair"].active = True
                     self.assertTrue(manager.targets[speaker.id].active)
+                    self.assertIsNone(manager.targets[speaker.id].input)
                     self.assertEqual(len(manager.targets[speaker.id].groups), 2)
                 finally:
                     await manager.close()

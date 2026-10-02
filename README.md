@@ -1,9 +1,9 @@
 # Sendspin Bridge
 
 AirPlay 1 targets for Sendspin speakers, stereo pairs and groups. By default,
-every discovered speaker gets its own target; set `exposed="false"` to reserve
-it for pairs and groups only. AirPlay PCM stays local: libraop decodes it, then the bridge sends
-it directly to that speaker's Sendspin session.
+every unpaired discovered speaker gets its own target; pairing two speakers
+replaces their individual targets with one stereo destination. AirPlay PCM stays
+local: libraop decodes it, then the bridge sends it to Sendspin sessions.
 
 ## Docker / homelab
 
@@ -87,10 +87,12 @@ source is checked in.
 - `direction="inbound"`: a player discovers the bridge's
   `_sendspin-server._tcp` service and connects to it on `-server-port`.
 - Exactly one direction is allowed per speaker.
-- `exposed="false"` stops advertising the speaker's own target. It still
-  plays its groups; outside any group the bridge leaves the player alone (no
-  Sendspin session), so another server can use it.
-- `delay_ms` offsets only that speaker's group audio (−500–500 ms): positive
+- `exposed="false"` stops advertising an unpaired speaker's own target.
+  Pairing also suspends both individual AirPlay targets without changing their
+  stored `exposed` preferences; removing the pair restores each preference.
+  Speakers still play in their pairs and groups. Outside either, the bridge
+  leaves unexposed players alone (no Sendspin session) for another server.
+- `delay_ms` offsets only that speaker's group or stereo audio (−500–500 ms): positive
   holds it back and negative advances it. It works for both `inbound` and
   `outbound` speakers. The first hello writes `delay_ms="0"`; after that the
   XML value is authoritative.
@@ -98,16 +100,18 @@ source is checked in.
   receives the left channel and `right_id` the right, each duplicated to both
   output channels so mono-only or stereo devices work. A speaker can belong to
   at most one pair. If one side disconnects, the other plays the full mix.
+  Physical speakers stay in `<speakers>` for discovery, status, live volume and
+  synchronization settings; the dashboard nests them under Stereo while paired.
   Existing configurations without `<stereos>` continue to load unchanged.
 - Each `<group>` is advertised as its own AirPlay target
   (`port` is filled in if missing). It plays in sync on every member `speaker
   id`. A stereo pair is added to the group by listing both of its speaker IDs;
   listing only one is rejected. The dashboard offers the pair as one membership
   choice. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
-  member the same Sendspin timestamp, routing left/right only for paired members. Visible members stay advertised on their
-  own; unexposed members are not advertised but remain connected to feed groups.
-  If a speaker's own target and one of its groups play at once, the speaker
-  mixes both. Group volume moves the members' average and keeps their
+  member the same Sendspin timestamp, routing left/right only for paired members.
+  Unpaired exposed members stay advertised on their own; paired members are not
+  advertised individually but remain connected. An unpaired speaker can mix its
+  own target and group; paired speakers can mix their stereo and group targets. Group volume moves the members' average and keeps their
   differences; at 0 or 100 every member ends up equal. During playback,
   dashboard volume changes are reported to the AirPlay sender via DACP when
   available: one level for the active individual target or group, never its

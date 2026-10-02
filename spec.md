@@ -2,8 +2,8 @@
 
 ## Objetivo
 
-Un destino AirPlay 1 por altavoz Sendspin descubierto, pareja estéreo y grupo
-configurado. mDNS, `config.xml` persistente y un editor web para cambiarlo
+Un destino AirPlay 1 por altavoz Sendspin individual expuesto, pareja estéreo y
+grupo configurado. mDNS, `config.xml` persistente y un editor web para cambiarlo
 visualmente. No soporta AirPlay 2.
 
 ## Runtime
@@ -62,19 +62,22 @@ de diez desde 7000.
 - `outbound`: el bridge descubre o marca al reproductor Sendspin.
 - `inbound`: el reproductor descubre y marca al bridge. `client_id` es la
   identidad que evita que un altavoz use ambos sentidos.
-- `exposed="false"` no anuncia el target individual; sigue reproduciendo grupos y parejas.
+- `exposed="false"` no anuncia el target individual. Una pareja suspende los
+  dos targets individuales aunque sus flags `exposed` sean `true`; el XML retiene
+  las preferencias y las recupera al quitar la pareja. Los altavoces físicos
+  permanecen en `<speakers>` para descubrimiento, volumen y retardo.
 - Cada `<stereo>` anuncia un target propio, usa dos altavoces distintos y enruta
   L/R duplicando cada lado en ambos canales de salida. Los grupos incluyen la
   pareja listando sus dos IDs de altavoz; un solo lado se rechaza. Si falta un
   miembro conectado, el restante recibe la mezcla estéreo completa.
-- `delay_ms` está incluido en `[-500, 500]` y afecta sólo al audio de grupos:
+- `delay_ms` está incluido en `[-500, 500]` y afecta sólo al audio de grupos y parejas:
   positivo lo retiene, negativo lo adelanta. El primer hello materializa `0`.
 
 ## Grupos y volumen
 
 Cada `<group>` y `<stereo>` tiene su propio receptor AirPlay. Su PCM se guarda
-por índice de chunk; cada miembro mezcla su copia (L, R o estéreo) con su
-entrada individual usando saturación S16. El offset de cada miembro se aplica
+por índice de chunk; cada miembro mezcla su copia (L, R o estéreo) con la
+entrada individual si no está emparejado, usando saturación S16. El offset de cada miembro se aplica
 por fotogramas completos antes de mezclar, sin permutar L/R. El volumen mueve la
 media de los miembros sin borrar su diferencia, limitado a 0–100.
 

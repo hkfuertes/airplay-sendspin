@@ -71,6 +71,9 @@ function App() {
 
   useEffect(() => { load(); }, []);
 
+  const pairedIds = new Set(config?.stereos.filter((pair) => pair.left_id && pair.right_id).flatMap((pair) => [pair.left_id, pair.right_id]));
+  const individualSpeakers = config?.speakers.filter((speaker) => !pairedIds.has(speaker.id)) ?? [];
+
   const update = (fn) => setConfig((current) => {
     const copy = structuredClone(current);
     fn(copy);
@@ -167,10 +170,10 @@ function App() {
       </div> : <form id="config-form" onSubmit={save}>
         <section class="mt-7" aria-labelledby="speakers-title">
           <div class="mb-3 flex items-center justify-between gap-3.5 max-sm:items-start">
-            <div><h2 id="speakers-title" class="mb-0.5 text-[19px] tracking-tight">Speakers <span class="ml-1 text-sm font-normal text-muted">{config.speakers.length}</span></h2><p class="text-xs text-muted">Discovered automatically · Adjust volume directly or expand settings to edit.</p></div>
+            <div><h2 id="speakers-title" class="mb-0.5 text-[19px] tracking-tight">Speakers <span class="ml-1 text-sm font-normal text-muted">{individualSpeakers.length}</span></h2><p class="text-xs text-muted">Discovered automatically · Adjust volume directly or expand settings to edit.</p></div>
           </div>
           <div class="grid gap-2">
-            {config.speakers.map((speaker, index) => <SpeakerCard
+            {config.speakers.map((speaker, index) => !pairedIds.has(speaker.id) && <SpeakerCard
               key={speaker.id} speaker={speaker}
               onChange={(field, value) => update((copy) => { copy.speakers[index][field] = value; })}
               onPreviewVolume={(volume) => update((copy) => { copy.speakers[index].volume = volume; })}
@@ -185,7 +188,7 @@ function App() {
                 setMessage("Speaker removed. Save & restart to apply.");
               }}
             />)}
-            {config.speakers.length === 0 && <p class={emptyClass}>No speakers discovered yet. They will appear here when they connect.</p>}
+            {individualSpeakers.length === 0 && <p class={emptyClass}>{config.speakers.length ? "All speakers are in stereo pairs. Adjust them under Stereo." : "No speakers discovered yet. They will appear here when they connect."}</p>}
           </div>
         </section>
 
@@ -212,6 +215,9 @@ function App() {
               })}
               onSwap={() => update((copy) => { const pair = copy.stereos[index]; [pair.left_id, pair.right_id] = [pair.right_id, pair.left_id]; })}
               onCommitVolume={(volume) => setMembersVolume(`/api/stereos/${encodeURIComponent(stereo.id)}/volume`, [stereo.left_id, stereo.right_id], volume)}
+              onMemberChange={(id, field, value) => update((copy) => { const member = copy.speakers.find((item) => item.id === id); if (member) member[field] = value; })}
+              onMemberPreviewVolume={(id, volume) => update((copy) => { const member = copy.speakers.find((item) => item.id === id); if (member) member.volume = volume; })}
+              onMemberCommitVolume={setVolume}
               onDelete={() => { update((copy) => { copy.stereos.splice(index, 1); }); setMessage("Stereo removed. Save & restart to apply."); }} />)}
             {config.stereos.length === 0 && <p class={emptyClass}>No stereo pairs yet. Pair two speakers to create one AirPlay destination.</p>}
           </div>
@@ -235,7 +241,7 @@ function App() {
   </div>;
 }
 
-function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume, onDelete }) {
+function SpeakerCard({ speaker, side, onChange, onPreviewVolume, onCommitVolume, onDelete }) {
   const connected = Boolean(speaker.connected);
   const volume = Number(speaker.volume ?? 100);
   const volumeId = `volume-${encodeURIComponent(speaker.id)}`;
@@ -243,24 +249,24 @@ function SpeakerCard({ speaker, onChange, onPreviewVolume, onCommitVolume, onDel
     <div class="flex min-h-16 flex-wrap items-center justify-between gap-x-[18px] gap-y-3 px-[17px] py-3 max-sm:gap-y-2">
       <div class="flex min-w-[180px] flex-1 items-center gap-[15px] max-sm:w-full">
         <span class={`inline-flex min-w-16 items-center gap-1.5 text-[11px] ${connected ? "text-[#b6efd3]" : "text-muted"}`}><span class={`size-[7px] shrink-0 rounded-full ${connected ? "bg-[#82e5ae]" : "bg-[#778b8d]"}`} />{connected ? "Online" : "Offline"}</span>
-        <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{speaker.exposed_name || speaker.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{speaker.exposed ? "Exposed" : "Not exposed"} · {speaker.id}</small></span>
+        <span class={deviceNameClass}><strong class="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold">{side ? `${side} · ` : ""}{speaker.exposed_name || speaker.id}</strong><small class="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted">{side ? "Stereo member" : speaker.exposed ? "Exposed" : "Not exposed"} · {speaker.id}</small></span>
       </div>
       <div class="flex items-center gap-6 max-sm:w-full max-sm:justify-between">
         <div class="w-[170px] max-sm:w-[min(55%,200px)]">
           <label class="mb-0.5 flex justify-between text-[11px] text-muted" for={volumeId}>Volume <output class="font-semibold text-ink" for={volumeId}>{volume}%</output></label>
           <input class="m-0 w-full cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-45" id={volumeId} type="range" min="0" max="100" value={volume} disabled={!connected} onInput={(event) => onPreviewVolume(Number(event.currentTarget.value))} onChange={(event) => onCommitVolume(Number(event.currentTarget.value))} />
         </div>
-        <Toggle checked={speaker.exposed} onChange={(exposed) => onChange("exposed", exposed)}>Exposed</Toggle>
+        {!side && <Toggle checked={speaker.exposed} onChange={(exposed) => onChange("exposed", exposed)}>Exposed</Toggle>}
       </div>
     </div>
     <details class="group border-t border-line">
       <summary class="flex w-fit cursor-pointer list-none items-center gap-1 px-[17px] py-[7px] text-xs text-[#bdd9cf] hover:bg-[#21333a] [&::-webkit-details-marker]:hidden">Settings <span class={`${chevronClass} ml-1 size-1.5`} aria-hidden="true" /></summary>
       <div class="grid gap-4 border-t border-line p-[17px]"><div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
         <Text label="Exposed name" value={speaker.exposed_name} onInput={(value) => onChange("exposed_name", value)} />
-        <NumberField label="Group offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
+        <NumberField label="Sync offset (ms)" value={speaker.delay_ms ?? 0} min="-500" max="500" onInput={(value) => onChange("delay_ms", value)} />
       </div>
-      <p class="m-0 text-xs leading-normal text-muted">Group offset: −500 to 500 ms.</p>
-      <div class="border-t border-line pt-3"><button class="p-0 text-xs text-[#ffbdb4] hover:underline" type="button" aria-label={`Remove ${speaker.exposed_name || speaker.id}`} onClick={onDelete}>Remove speaker</button></div>
+      <p class="m-0 text-xs leading-normal text-muted">Group and stereo offset: −500 to 500 ms.</p>
+      {!side && <div class="border-t border-line pt-3"><button class="p-0 text-xs text-[#ffbdb4] hover:underline" type="button" aria-label={`Remove ${speaker.exposed_name || speaker.id}`} onClick={onDelete}>Remove speaker</button></div>}
       </div>
     </details>
   </article>;
@@ -274,7 +280,7 @@ function Toggle({ checked, onChange, children }) {
   </label>;
 }
 
-function StereoCard({ stereo, speakers, available, startOpen, onChange, onSwap, onCommitVolume, onDelete }) {
+function StereoCard({ stereo, speakers, available, startOpen, onChange, onSwap, onCommitVolume, onMemberChange, onMemberPreviewVolume, onMemberCommitVolume, onDelete }) {
   const members = [stereo.left_id, stereo.right_id].map((id) => speakers.find((speaker) => speaker.id === id));
   const connected = members.filter((speaker) => speaker?.connected);
   const volume = connected.length ? Math.round(connected.reduce((sum, speaker) => sum + Number(speaker.volume ?? 100), 0) / connected.length) : 0;
@@ -296,6 +302,13 @@ function StereoCard({ stereo, speakers, available, startOpen, onChange, onSwap, 
           <Select label="Left speaker" value={stereo.left_id} speakers={available.filter((speaker) => speaker.id !== stereo.right_id || speaker.id === stereo.left_id)} onChange={(value) => onChange("left_id", value)} />
           <Select label="Right speaker" value={stereo.right_id} speakers={available.filter((speaker) => speaker.id !== stereo.left_id || speaker.id === stereo.right_id)} onChange={(value) => onChange("right_id", value)} />
         </div>
+        {stereo.left_id && stereo.right_id && <div class="grid gap-2">
+          <p class="m-0 text-xs leading-normal text-muted">Individual AirPlay targets are paused while paired. Removing the pair restores their previous visibility.</p>
+          {members.map((speaker, index) => speaker && <SpeakerCard key={speaker.id} speaker={speaker} side={index === 0 ? "Left" : "Right"}
+            onChange={(field, value) => onMemberChange(speaker.id, field, value)}
+            onPreviewVolume={(volume) => onMemberPreviewVolume(speaker.id, volume)}
+            onCommitVolume={(volume) => onMemberCommitVolume(speaker.id, volume)} />)}
+        </div>}
         <div class="flex items-center justify-between border-t border-line pt-3"><button class={quietButton} type="button" disabled={!stereo.left_id || !stereo.right_id} onClick={onSwap}>Swap L/R</button><button class="p-0 text-xs text-[#ffbdb4] hover:underline" type="button" onClick={onDelete}>Remove stereo</button></div>
       </div>
     </details>

@@ -166,11 +166,12 @@ class GroupTarget:
 class Target:
     """One player, its individual AirPlay input, and its Sendspin PushStream."""
 
-    def __init__(self, manager: Manager, speaker: Speaker, groups: list[GroupTarget]) -> None:
+    def __init__(self, manager: Manager, speaker: Speaker, groups: list[GroupTarget], *, paired: bool = False) -> None:
         self.manager = manager
         self.speaker = speaker
         self.groups = groups
-        self.input = AirPlayInput(manager, speaker.id, speaker.exposed_name, speaker.port) if speaker.exposed else None
+        # Pair membership suspends only the individual AirPlay target; keep the stored preference for unpairing.
+        self.input = AirPlayInput(manager, speaker.id, speaker.exposed_name, speaker.port) if speaker.exposed and not paired else None
         self.player = None
         self.stream = None
         self.playing = False
@@ -448,7 +449,8 @@ class Manager:
         if target is not None:
             return target
         # Keep the list shared: inbound players can connect before groups finish starting.
-        target = Target(self, speaker, self.member_groups.setdefault(speaker.id, []))
+        paired = any(speaker.id in (pair.left_id, pair.right_id) for pair in self.registry.stereos())
+        target = Target(self, speaker, self.member_groups.setdefault(speaker.id, []), paired=paired)
         self.targets[speaker.id] = target
         try:
             await target.start()
