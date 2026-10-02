@@ -5,9 +5,12 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, call, patch
 
+import numpy as np
+
 from sendspin_bridge.app import AirPlayInput, Config, GroupTarget, Manager, Target
 from sendspin_bridge.raop import Receiver, VOLUME
-from sendspin_bridge.registry import Group, INBOUND, Registry, Speaker
+from sendspin_bridge.audio import CHUNK_SAMPLES, GroupBuffer
+from sendspin_bridge.registry import Group, INBOUND, Registry, Speaker, Stereo
 
 
 class FakeTarget:
@@ -24,10 +27,13 @@ class FakeTarget:
 
 
 class ManagerVolumeTests(unittest.TestCase):
-    def test_only_exposed_speakers_get_an_input(self) -> None:
+    def test_only_unpaired_exposed_speakers_get_an_input(self) -> None:
         manager = object.__new__(Manager)
         self.assertIsNone(Target(manager, Speaker(id="kitchen", exposed=False), []).input)
         self.assertIsNotNone(Target(manager, Speaker(id="bedroom", exposed=True), []).input)
+        speaker = Speaker(id="left", exposed=True)
+        self.assertIsNone(Target(manager, speaker, [], paired=True).input)
+        self.assertTrue(speaker.exposed)  # Unpairing restores the saved preference.
 
     def test_individual_volume_is_live_only(self) -> None:
         manager = object.__new__(Manager)
@@ -66,12 +72,61 @@ class ManagerVolumeTests(unittest.TestCase):
         group.input.send_volume.assert_called_once()
         self.assertEqual(manager.set_group_volume(["missing", "offline"], 50, "salon"), {})
 
+    def test_stereo_volume_notifies_only_its_active_airplay_target(self) -> None:
+        manager = object.__new__(Manager)
+        left, right = FakeTarget(20), FakeTarget(60)
+        manager.targets = {"left": left, "right": right}
+        stereo = Mock(active=True)
+        manager.stereo_targets = {"pair": stereo}
+        self.assertEqual(manager.set_stereo_volume(["left", "right"], 50, "pair"), {"left": 30, "right": 70})
+        stereo.input.send_volume.assert_called_once_with(50)
+        left.input.send_volume.assert_not_called()
+        right.input.send_volume.assert_not_called()
+
     def test_incoming_airplay_volume_does_not_echo(self) -> None:
         target = Target(Mock(), Speaker(id="kitchen"), [])
         target.input = Mock(events=lambda: [(VOLUME, 0.60)])
         target.handle_events()
         self.assertEqual(target.volume, 60)
         target.input.send_volume.assert_not_called()
+
+
+class StereoRoutingTests(unittest.TestCase):
+    def test_stereo_pair_and_multiroom_share_timestamp_but_not_channels(self) -> None:
+        manager = object.__new__(Manager)
+        manager.targets = {}
+        pair = Stereo("pair", "left", "right")
+        group = GroupTarget(manager, Group("home", speaker_ids=["left", "right", "kitchen"]), [pair])
+        group.active = True
+        audio = np.empty(CHUNK_SAMPLES, dtype="<i2")
+        audio[::2], audio[1::2] = 100, 300
+        group.buffer = GroupBuffer(lambda _frames: audio.tobytes())
+        for speaker_id in ("left", "right", "kitchen"):
+            target = Target(manager, Speaker(id=speaker_id, exposed=False), [group])
+            target.player = object()
+            manager.targets[speaker_id] = target
+        for speaker_id, left, right in (("left", 100, 100), ("right", 300, 300), ("kitchen", 100, 300)):
+            with self.subTest(speaker=speaker_id):
+                result = np.frombuffer(manager.targets[speaker_id].render(0), dtype="<i2")
+                self.assertTrue(np.all(result[::2] == left))
+                self.assertTrue(np.all(result[1::2] == right))
+        stereo = GroupTarget(manager, Group("pair", speaker_ids=["left", "right"]), [pair], key="stereo:pair")
+        stereo.active = True
+        stereo.buffer = GroupBuffer(lambda _frames: audio.tobytes())
+        manager.targets["left"].groups.append(stereo)
+        manager.targets["right"].groups.append(stereo)
+        solo = np.empty(CHUNK_SAMPLES, dtype="<i2")
+        solo[::2], solo[1::2] = 50, 150
+        manager.targets["left"].playing = True
+        manager.targets["left"].input = Mock(read_pcm=lambda: solo.tobytes())
+        mixed = np.frombuffer(manager.targets["left"].render(0), dtype="<i2")
+        self.assertTrue(np.all(mixed[::2] == 250))  # Individual L + multiroom L + stereo L.
+        self.assertTrue(np.all(mixed[1::2] == 350))  # Individual R + multiroom L + stereo L.
+        manager.targets["left"].playing = False
+        manager.targets["right"].player = None
+        fallback = np.frombuffer(manager.targets["left"].render(0), dtype="<i2")
+        self.assertTrue(np.all(fallback[::2] == 200))
+        self.assertTrue(np.all(fallback[1::2] == 600))
 
 
 class VolumeFeedbackTests(unittest.IsolatedAsyncioTestCase):
@@ -110,6 +165,57 @@ class VolumeFeedbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ManagerStartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unpairing_restores_only_previously_exposed_individual_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager = Manager(Config(config_path=f"{temp}/config.xml"))
+            left, right = Speaker(id="left", exposed=True), Speaker(id="right", exposed=False)
+            manager.registry = Registry(speakers=[left, right], stereos=[Stereo("pair", "left", "right")])
+            with patch.object(AirPlayInput, "start", new_callable=AsyncMock):
+                paired = await manager._ensure_target(left)
+                self.assertIsNone(paired.input)
+                await paired.close()
+                manager.targets.clear()
+                manager.registry = Registry(speakers=[left, right])
+                unpaired = await manager._ensure_target(left)
+                hidden = await manager._ensure_target(right)
+                self.assertIsNotNone(unpaired.input)
+                self.assertIsNone(hidden.input)
+                await unpaired.close()
+                await hidden.close()
+
+    async def test_early_inbound_player_joins_stereo_and_multiroom(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager = Manager(Config(config_path=f"{temp}/config.xml"))
+            speaker = Speaker(id="left", direction=INBOUND, exposed=True)
+            other = Speaker(id="right", direction=INBOUND, exposed=False)
+            manager.registry = Registry(
+                speakers=[speaker, other], stereos=[Stereo("pair", "left", "right")],
+                groups=[Group("home", speaker_ids=["left", "right"])],
+            )
+
+            async def connect_early(**_):
+                await manager._ensure_target(speaker)
+
+            server = Mock(start_server=AsyncMock(side_effect=connect_early), close=AsyncMock())
+            server.add_event_listener.return_value = lambda: None
+            web = Mock(start=AsyncMock(), close=AsyncMock(), url="http://localhost")
+            with (
+                patch("sendspin_bridge.app._load_identity"),
+                patch("sendspin_bridge.app.FileServerPairingStore.open", new_callable=AsyncMock),
+                patch("sendspin_bridge.app.lan_ipv4", return_value="127.0.0.1"),
+                patch("sendspin_bridge.app.SendspinServer", return_value=server),
+                patch("sendspin_bridge.app.ConfigWeb", return_value=web),
+                patch.object(GroupTarget, "start", new_callable=AsyncMock),
+            ):
+                try:
+                    await manager.start()
+                    manager.stereo_targets["pair"].active = True
+                    self.assertTrue(manager.targets[speaker.id].active)
+                    self.assertIsNone(manager.targets[speaker.id].input)
+                    self.assertEqual(len(manager.targets[speaker.id].groups), 2)
+                finally:
+                    await manager.close()
+
     async def test_early_inbound_player_joins_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager = Manager(Config(config_path=f"{temp}/config.xml"))

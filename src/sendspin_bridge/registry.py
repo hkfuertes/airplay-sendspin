@@ -55,6 +55,15 @@ class Group:
     speaker_ids: list[str] = field(default_factory=list)
 
 
+@dataclass
+class Stereo:
+    id: str
+    left_id: str
+    right_id: str
+    exposed_name: str = ""
+    port: int = 0
+
+
 class Registry:
     """Validates and atomically writes config.xml under one process lock."""
 
@@ -67,6 +76,7 @@ class Registry:
         exposed_suffix: str = DEFAULT_EXPOSED_SUFFIX,
         speakers: list[Speaker] | None = None,
         groups: list[Group] | None = None,
+        stereos: list[Stereo] | None = None,
     ) -> None:
         if not 0 < port_base <= 65535 or port_range < 3:
             raise ValueError("AirPlay port base and range are invalid")
@@ -76,6 +86,7 @@ class Registry:
         self.exposed_suffix = exposed_suffix
         self._speakers = speakers or []
         self._groups = groups or []
+        self._stereos = stereos or []
         self._lock = threading.RLock()
 
     @classmethod
@@ -110,6 +121,16 @@ class Registry:
                     ),
                 )
             )
+        stereos = [
+            Stereo(
+                id=node.get("id", ""),
+                left_id=node.get("left_id", ""),
+                right_id=node.get("right_id", ""),
+                exposed_name=node.get("exposed_name", ""),
+                port=_integer(node.get("port"), "stereo port"),
+            )
+            for node in root.findall("./stereos/stereo")
+        ]
         groups: list[Group] = []
         for node in root.findall("./groups/group"):
             groups.append(
@@ -127,6 +148,7 @@ class Registry:
             exposed_suffix=root.get("exposed_suffix", DEFAULT_EXPOSED_SUFFIX),
             speakers=speakers,
             groups=groups,
+            stereos=stereos,
         )
         registry._normalize()
         registry.save()
@@ -139,6 +161,10 @@ class Registry:
     def groups(self) -> list[Group]:
         with self._lock:
             return copy.deepcopy(self._groups)
+
+    def stereos(self) -> list[Stereo]:
+        with self._lock:
+            return copy.deepcopy(self._stereos)
 
     def speaker(self, speaker_id: str) -> Speaker | None:
         with self._lock:
@@ -243,6 +269,14 @@ class Registry:
                 if endpoint.port:
                     endpoint_attrs["port"] = str(endpoint.port)
                 ET.SubElement(node, "endpoint", endpoint_attrs)
+            if self._stereos:
+                stereos = ET.SubElement(root, "stereos")
+                for stereo in self._stereos:
+                    ET.SubElement(stereos, "stereo", {
+                        "id": stereo.id, "exposed_name": stereo.exposed_name,
+                        "left_id": stereo.left_id, "right_id": stereo.right_id,
+                        "port": str(stereo.port),
+                    })
             groups = ET.SubElement(root, "groups")
             for group in self._groups:
                 node = ET.SubElement(
@@ -282,6 +316,21 @@ class Registry:
                 raise ValueError(f"speaker {speaker.id!r} has delay_ms {speaker.delay_ms}, want -500..500")
             speaker.endpoint = speaker.endpoint.normalized()
 
+        paired: set[str] = set()
+        stereo_ids: set[str] = set()
+        for stereo in self._stereos:
+            if not stereo.id or stereo.id in stereo_ids:
+                raise ValueError("config has missing or duplicate stereo id")
+            stereo_ids.add(stereo.id)
+            if (stereo.left_id not in ids or stereo.right_id not in ids
+                    or stereo.left_id == stereo.right_id):
+                raise ValueError(f"stereo {stereo.id!r} needs two distinct existing speakers")
+            if stereo.left_id in paired or stereo.right_id in paired:
+                raise ValueError(f"stereo {stereo.id!r} reuses a paired speaker")
+            paired.update((stereo.left_id, stereo.right_id))
+            stereo.exposed_name = stereo.exposed_name or stereo.id
+            stereo.port = stereo.port or self._next_port()
+
         group_ids: set[str] = set()
         for group in self._groups:
             if not group.id or group.id in group_ids:
@@ -294,9 +343,14 @@ class Registry:
                 if speaker_id not in ids or speaker_id in seen_members:
                     raise ValueError(f"group {group.id!r} has unknown or duplicate speaker {speaker_id!r}")
                 seen_members.add(speaker_id)
+            for stereo in self._stereos:
+                if (stereo.left_id in seen_members) != (stereo.right_id in seen_members):
+                    raise ValueError(f"group {group.id!r} must include both speakers of stereo {stereo.id!r}")
 
     def _next_port(self) -> int:
-        used = {speaker.port for speaker in self._speakers} | {group.port for group in self._groups}
+        used = ({speaker.port for speaker in self._speakers}
+                | {group.port for group in self._groups}
+                | {stereo.port for stereo in self._stereos})
         for port in range(self.port_base, 65536 - self.port_range + 1, self.port_range):
             if port not in used:
                 return port

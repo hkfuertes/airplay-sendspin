@@ -11,7 +11,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from .registry import Endpoint, Group, Registry, Speaker
+from .registry import Endpoint, Group, Registry, Speaker, Stereo
 
 LOG = logging.getLogger(__name__)
 TOKEN_HEADER = "X-Config-Token"
@@ -35,6 +35,7 @@ class ConfigWeb:
         speaker_state: Callable[[str], dict],
         set_speaker_volume: Callable[[str, int], int | None],
         set_group_volume: Callable[[list[str], int, str], dict[str, int]],
+        set_stereo_volume: Callable[[list[str], int, str], dict[str, int]],
         replace_registry: Callable[[Registry], None],
         restart: Callable[[], None],
     ) -> None:
@@ -48,6 +49,7 @@ class ConfigWeb:
         self._speaker_state = speaker_state
         self._set_speaker_volume = set_speaker_volume
         self._set_group_volume = set_group_volume
+        self._set_stereo_volume = set_stereo_volume
         self._replace_registry = replace_registry
         self._restart = restart
         self._token = CONFIG_TOKEN
@@ -70,6 +72,7 @@ class ConfigWeb:
         app.router.add_put("/api/config", self._put_config)
         app.router.add_put("/api/speakers/{speaker_id}/volume", self._put_volume)
         app.router.add_put("/api/groups/{group_id}/volume", self._put_group_volume)
+        app.router.add_put("/api/stereos/{stereo_id}/volume", self._put_stereo_volume)
         app.router.add_static("/", static_root, show_index=False)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -145,6 +148,25 @@ class ConfigWeb:
             return web.json_response({"error": "no connected speakers in group"}, status=409)
         return web.json_response({"volume": round(sum(updated.values()) / len(updated)), "speakers": updated})
 
+    async def _put_stereo_volume(self, request: web.Request) -> web.Response:
+        try:
+            payload = _object(await request.json(), "request")
+            volume = _integer(payload.get("volume"), "volume", 0, 100)
+            members = payload.get("speaker_ids")
+            if not isinstance(members, list) or not all(isinstance(member, str) for member in members):
+                raise ValueError("speaker_ids must be an array of speaker IDs")
+        except (ValueError, json.JSONDecodeError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+        stereo = next((item for item in self._registry().stereos() if item.id == request.match_info["stereo_id"]), None)
+        if stereo is None:
+            return web.json_response({"error": "stereo not found; save and restart first"}, status=404)
+        if members != [stereo.left_id, stereo.right_id]:
+            return web.json_response({"error": "stereo speakers changed; save and restart first"}, status=409)
+        updated = self._set_stereo_volume(members, volume, stereo.id)
+        if not updated:
+            return web.json_response({"error": "no connected speakers in stereo"}, status=409)
+        return web.json_response({"volume": round(sum(updated.values()) / len(updated)), "speakers": updated})
+
     def _payload(self) -> dict:
         payload = registry_to_payload(self._registry())
         for speaker in payload["speakers"]:
@@ -173,6 +195,16 @@ def registry_to_payload(registry: Registry) -> dict:
             }
             for speaker in registry.speakers()
         ],
+        "stereos": [
+            {
+                "id": stereo.id,
+                "exposed_name": stereo.exposed_name,
+                "port": stereo.port,
+                "left_id": stereo.left_id,
+                "right_id": stereo.right_id,
+            }
+            for stereo in registry.stereos()
+        ],
         "groups": [
             {
                 "id": group.id,
@@ -190,7 +222,9 @@ def registry_from_payload(payload: object, path: str, port_base: int, port_range
         raise ValueError("configuration must be an object")
     speakers_data = _list(payload, "speakers")
     groups_data = _list(payload, "groups")
+    stereos_data = _list(payload, "stereos")
     speakers = [_speaker(item, index) for index, item in enumerate(speakers_data, 1)]
+    stereos = [_stereo(item, index) for index, item in enumerate(stereos_data, 1)]
     groups = [_group(item, index) for index, item in enumerate(groups_data, 1)]
     registry = Registry(
         path,
@@ -199,6 +233,7 @@ def registry_from_payload(payload: object, path: str, port_base: int, port_range
         exposed_suffix=_text(payload, "exposed_suffix", strip=False),
         speakers=speakers,
         groups=groups,
+        stereos=stereos,
     )
     registry._normalize()
     return registry
@@ -224,6 +259,17 @@ def _speaker(value: object, index: int) -> Speaker:
             port=_integer(endpoint.get("port", 0), f"speaker {index} endpoint port", 0, 65535),
             path=_text(endpoint, "path", "/sendspin"),
         ),
+    )
+
+
+def _stereo(value: object, index: int) -> Stereo:
+    data = _object(value, f"stereo {index}")
+    return Stereo(
+        id=_required_text(data, "id", f"stereo {index}"),
+        left_id=_required_text(data, "left_id", f"stereo {index}"),
+        right_id=_required_text(data, "right_id", f"stereo {index}"),
+        exposed_name=_text(data, "exposed_name"),
+        port=_integer(data.get("port", 0), f"stereo {index} port", 0, 65535),
     )
 
 

@@ -41,9 +41,9 @@ class GroupBuffer:
         self._indices = [-1] * CACHE_CHUNKS
         self._next = None
 
-    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int) -> None:
-        """Mix this group at a signed millisecond offset into a 20 ms S32 buffer."""
-        offset = delay_ms * SAMPLE_RATE * CHANNELS // 1000
+    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int, channel: int | None = None) -> None:
+        """Mix group audio at a signed frame-aligned offset; duplicate one side for stereo pairs."""
+        offset = round(delay_ms * SAMPLE_RATE / 1000) * CHANNELS
         start = playback_chunk * CHUNK_SAMPLES - offset
         if start < 0:
             return
@@ -54,7 +54,10 @@ class GroupBuffer:
                 continue
             left = max(start, index * CHUNK_SAMPLES)
             right = min(end, (index + 1) * CHUNK_SAMPLES)
-            output[left - start : right - start] += source[left - index * CHUNK_SAMPLES : right - index * CHUNK_SAMPLES]
+            samples = source[left - index * CHUNK_SAMPLES : right - index * CHUNK_SAMPLES]
+            if channel is not None:
+                samples = np.repeat(samples[channel::CHANNELS], CHANNELS)
+            output[left - start : right - start] += samples
 
     def _chunk_at(self, index: int) -> np.ndarray | None:
         if self._next is None or index - self._next >= CACHE_CHUNKS:
