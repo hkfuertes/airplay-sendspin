@@ -171,3 +171,8 @@ merging and remain responsible for releases, security, and support.
 - [go-librespot](https://github.com/devgianlu/go-librespot), by devgianlu,
   provides the Spotify Connect receiver and PCM output.
 - [Home Assistant](https://www.home-assistant.io/) provides the add-on platform.
+
+## License
+
+GNU General Public License v3.0 (see `LICENSE`): the bridge runs go-librespot,
+which is GPL-3.0, inside its own process. libraop is MIT-licensed.
