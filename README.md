@@ -3,7 +3,8 @@
 AirPlay 1 targets for Sendspin speakers, stereo pairs and groups. By default,
 every unpaired discovered speaker gets its own target; pairing two speakers
 replaces their individual targets with one stereo destination. AirPlay PCM stays
-local: libraop decodes it, then the bridge sends it to Sendspin sessions.
+local: libraop decodes it, then the bridge sends it to Sendspin sessions. Spotify
+Connect can feed the same destinations: go-librespot runs inside the bridge via CFFI.
 
 ## Docker / homelab
 
@@ -15,7 +16,37 @@ docker compose up -d
 # The image build compiles the libraop CFFI extension and runs Python tests.
 ```
 
-Host networking is required for mDNS and AirPlay discovery.
+Host networking is required for mDNS, AirPlay and Spotify Connect discovery.
+The image build also compiles go-librespot (Go with cgo) into a shared library.
+
+## Spotify Connect
+
+A Spotify Connect target is advertised alongside each exposed unpaired speaker,
+stereo pair and group. Both AirPlay and Spotify remain available. When multiple
+inputs play to a speaker, the last one to start wins for that speaker; if it
+stops, the previous active input resumes. Stereo routing, group membership
+and per-speaker sync offsets apply to both protocols. Spotify names match the
+AirPlay names; the Connect device ID derives from the name (as librespot's did),
+so duplicate names get a numeric suffix (` 2`) and names are capped at 62 bytes
+for mDNS. go-librespot runs in the bridge process as a C shared library
+(`golibrespot/`, called through CFFI). A small patch (`patches/go-librespot`)
+lets the bridge supply the mDNS registrar: go-librespot only serves the pairing
+endpoint, and the bridge publishes `_spotify-connect._tcp` with python-zeroconf,
+like the AirPlay records. If go-librespot stops (e.g. no internet at boot), it
+retries every 5 s. Pausing keeps buffered audio, so playback resumes seamlessly.
+A **Spotify Premium** account is required.
+Select the destination in Spotify on the trusted LAN; go-librespot stores reusable
+credentials under `state/spotify/` (or next to `config.xml` in the add-on), in
+private per-target directories. Do not expose the Spotify pairing ports or the
+configuration API outside the trusted LAN.
+
+Spotify's volume slider adjusts its own PCM. The dashboard's live
+speaker/group volume adjusts the physical Sendspin players; these two controls
+are independent (the dashboard cannot push volume back to Spotify). Renaming a
+Spotify target changes its Connect identity; reconnect it from Spotify if needed.
+Without `libgolibrespot.so` (a source checkout that has not built it) the AirPlay
+bridge still works, but Spotify targets are unavailable. `-no-spotify` disables
+them explicitly.
 
 ## Visual configuration
 
@@ -49,8 +80,11 @@ The bridge creates and atomically updates this file as speakers appear. It is
 runtime state and intentionally ignored by Git. Prefer the visual editor; a
 manual edit requires a bridge restart.
 
-`dependencies.lock` pins libraop. Docker clones and patches it, then links its
-PCM receiver into the Python CFFI extension. Sendspin uses the official
+`dependencies.lock` pins libraop and go-librespot. Docker clones them and applies
+`patches/`; libraop's PCM receiver links into the Python CFFI extension, and
+`golibrespot/` builds go-librespot as `libgolibrespot.so`. For local Go work, check
+go-librespot out at its pinned ref into the gitignored `third_party/go-librespot`
+and apply `patches/go-librespot`. Sendspin uses the official
 [`aiosendspin`](https://github.com/Sendspin/aiosendspin) package; no vendor
 source is checked in.
 
@@ -110,8 +144,9 @@ source is checked in.
   choice. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
   member the same Sendspin timestamp, routing left/right only for paired members.
   Unpaired exposed members stay advertised on their own; paired members are not
-  advertised individually but remain connected. An unpaired speaker can mix its
-  own target and group; paired speakers can mix their stereo and group targets. Group volume moves the members' average and keeps their
+  advertised individually but remain connected. Speakers can receive individual,
+  stereo and group targets; if several play, the most recently started input wins
+  on each speaker. Group volume moves the members' average and keeps their
   differences; at 0 or 100 every member ends up equal. During playback,
   dashboard volume changes are reported to the AirPlay sender via DACP when
   available: one level for the active individual target or group, never its
@@ -132,5 +167,12 @@ merging and remain responsible for releases, security, and support.
   Python Sendspin protocol implementation, sessions, audio conversion, and
   discovery.
 - [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf)
-  provides local multicast DNS advertisement for AirPlay.
+  provides local multicast DNS advertisement for AirPlay and Spotify Connect.
+- [go-librespot](https://github.com/devgianlu/go-librespot), by devgianlu,
+  provides the Spotify Connect receiver and PCM output.
 - [Home Assistant](https://www.home-assistant.io/) provides the add-on platform.
+
+## License
+
+GNU General Public License v3.0 (see `LICENSE`): the bridge runs go-librespot,
+which is GPL-3.0, inside its own process. libraop is MIT-licensed.

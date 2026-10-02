@@ -19,6 +19,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("-server-name", default="Sendspin Bridge", help="inbound Sendspin server name")
     result.add_argument("-web-host", default="0.0.0.0", help="configuration UI listen address")
     result.add_argument("-web-port", type=int, default=8080, help="configuration UI port")
+    result.add_argument("-no-spotify", action="store_true", help="disable Spotify Connect targets")
     return result
 
 
@@ -31,6 +32,7 @@ def manager_config(args: argparse.Namespace) -> Config:
         server_name=args.server_name,
         web_host=args.web_host,
         web_port=args.web_port,
+        spotify=not args.no_spotify,
     )
 
 

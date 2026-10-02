@@ -1,0 +1,76 @@
+diff --git a/daemon/app.go b/daemon/app.go
+index 1479539..fadbec2 100644
+--- a/daemon/app.go
++++ b/daemon/app.go
+@@ -27,6 +27,8 @@ type App struct {
+ 	log librespot.Logger
+ 	cfg *Config
+ 
++	zeroconfRegistrar zeroconf.ServiceRegistrar
++
+ 	stateStore librespot.StateStore
+ 
+ 	client *http.Client
+@@ -91,6 +93,8 @@ func New(opts *Options) (*App, error) {
+ 		stateStore: opts.StateStore,
+ 		logoutCh:   make(chan *AppPlayer),
+ 		client:     &http.Client{Timeout: 30 * time.Second},
++
++		zeroconfRegistrar: opts.ZeroconfRegistrar,
+ 	}
+ 
+ 	var err error
+@@ -503,7 +507,7 @@ func (app *App) withAppPlayer(ctx context.Context, appPlayerFunc func(context.Co
+ 		return fmt.Errorf("failed getting endpoints from resolver: %w", err)
+ 	}
+ 
+-	app.zeroconf, err = zeroconf.NewZeroconf(app.log, app.cfg.ZeroconfPort, app.cfg.DeviceName, app.deviceId, app.deviceType, app.cfg.ZeroconfInterfacesToAdvertise, app.cfg.ZeroconfBackend == "avahi")
++	app.zeroconf, err = zeroconf.NewZeroconf(app.log, app.cfg.ZeroconfPort, app.cfg.DeviceName, app.deviceId, app.deviceType, app.cfg.ZeroconfInterfacesToAdvertise, app.cfg.ZeroconfBackend == "avahi", app.zeroconfRegistrar)
+ 	if err != nil {
+ 		return fmt.Errorf("failed initializing zeroconf: %w", err)
+ 	}
+diff --git a/daemon/options.go b/daemon/options.go
+index 639d116..7dbd97d 100644
+--- a/daemon/options.go
++++ b/daemon/options.go
+@@ -3,6 +3,7 @@ package daemon
+ import (
+ 	librespot "github.com/devgianlu/go-librespot"
+ 	"github.com/devgianlu/go-librespot/mpris"
++	"github.com/devgianlu/go-librespot/zeroconf"
+ )
+ 
+ // Options bundles the dependencies a daemon needs at construction time.
+@@ -13,4 +14,8 @@ type Options struct {
+ 
+ 	APIServer   ApiServer
+ 	MediaPlayer mpris.Server
++
++	// ZeroconfRegistrar, when set, publishes the Spotify Connect service instead of
++	// the built-in or avahi backend, e.g. to share an embedding program's mDNS stack.
++	ZeroconfRegistrar zeroconf.ServiceRegistrar
+ }
+diff --git a/zeroconf/zeroconf.go b/zeroconf/zeroconf.go
+index 0bf3e83..14b3c47 100644
+--- a/zeroconf/zeroconf.go
++++ b/zeroconf/zeroconf.go
+@@ -46,7 +46,7 @@ type NewUserRequest struct {
+ 	result chan bool
+ }
+ 
+-func NewZeroconf(log librespot.Logger, port int, deviceName, deviceId string, deviceType devicespb.DeviceType, interfacesToAdvertise []string, useAvahi bool) (_ *Zeroconf, err error) {
++func NewZeroconf(log librespot.Logger, port int, deviceName, deviceId string, deviceType devicespb.DeviceType, interfacesToAdvertise []string, useAvahi bool, registrar ServiceRegistrar) (_ *Zeroconf, err error) {
+ 	z := &Zeroconf{log: log, deviceId: deviceId, deviceName: deviceName, deviceType: deviceType}
+ 	z.reqsChan = make(chan NewUserRequest)
+ 
+@@ -64,7 +64,9 @@ func NewZeroconf(log librespot.Logger, port int, deviceName, deviceId string, de
+ 	log.Infof("zeroconf server listening on port %d", listenPort)
+ 
+ 	// Select the mDNS backend based on configuration
+-	if useAvahi {
++	if registrar != nil {
++		z.registrar = registrar
++	} else if useAvahi {
+ 		avahiReg, err := NewAvahiRegistrar(log)
+ 		if err != nil {
+ 			_ = z.listener.Close()

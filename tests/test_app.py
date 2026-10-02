@@ -9,7 +9,7 @@ import numpy as np
 
 from sendspin_bridge.app import AirPlayInput, Config, GroupTarget, Manager, Target
 from sendspin_bridge.raop import Receiver, VOLUME
-from sendspin_bridge.audio import CHUNK_SAMPLES, GroupBuffer
+from sendspin_bridge.audio import CHUNK_BYTES, CHUNK_SAMPLES, GroupBuffer
 from sendspin_bridge.registry import Group, INBOUND, Registry, Speaker, Stereo
 
 
@@ -112,21 +112,136 @@ class StereoRoutingTests(unittest.TestCase):
                 self.assertTrue(np.all(result[1::2] == right))
         stereo = GroupTarget(manager, Group("pair", speaker_ids=["left", "right"]), [pair], key="stereo:pair")
         stereo.active = True
+        stereo.started_at = 2
+        group.started_at = 1
         stereo.buffer = GroupBuffer(lambda _frames: audio.tobytes())
         manager.targets["left"].groups.append(stereo)
         manager.targets["right"].groups.append(stereo)
         solo = np.empty(CHUNK_SAMPLES, dtype="<i2")
         solo[::2], solo[1::2] = 50, 150
         manager.targets["left"].playing = True
+        manager.targets["left"].started_at = 3
         manager.targets["left"].input = Mock(read_pcm=lambda: solo.tobytes())
-        mixed = np.frombuffer(manager.targets["left"].render(0), dtype="<i2")
-        self.assertTrue(np.all(mixed[::2] == 250))  # Individual L + multiroom L + stereo L.
-        self.assertTrue(np.all(mixed[1::2] == 350))  # Individual R + multiroom L + stereo L.
+        selected = np.frombuffer(manager.targets["left"].render(0), dtype="<i2")
+        self.assertTrue(np.all(selected[::2] == 50))  # Latest individual target wins.
+        self.assertTrue(np.all(selected[1::2] == 150))
         manager.targets["left"].playing = False
         manager.targets["right"].player = None
         fallback = np.frombuffer(manager.targets["left"].render(0), dtype="<i2")
-        self.assertTrue(np.all(fallback[::2] == 200))
-        self.assertTrue(np.all(fallback[1::2] == 600))
+        self.assertTrue(np.all(fallback[::2] == 100))  # Stereo is next newest; disconnected partner gets full mix.
+        self.assertTrue(np.all(fallback[1::2] == 300))
+
+
+class SpotifyRoutingTests(unittest.TestCase):
+    def test_spotify_and_airplay_stay_active_on_the_same_pair_and_group(self) -> None:
+        manager = object.__new__(Manager)
+        manager.spotify_enabled = True
+        manager.config = Config()
+        manager.registry = Registry()
+        manager.address = "127.0.0.1"
+        manager.targets = {}
+        pair = Stereo("pair", "left", "right")
+        group = GroupTarget(manager, Group("home", speaker_ids=["left", "right", "other"]), [pair])
+        group.active = True
+        group.started_at = 1
+        assert group.spotify is not None
+        group.spotify.playing = True
+        group.spotify.started_at = 2
+        airplay = np.empty(CHUNK_SAMPLES, dtype="<i2")
+        airplay[::2], airplay[1::2] = 100, 200
+        spotify = np.empty(CHUNK_SAMPLES, dtype="<i2")
+        spotify[::2], spotify[1::2] = 300, 400
+        group.buffer = GroupBuffer(lambda _: airplay.tobytes())
+        group.spotify_buffer = GroupBuffer(lambda _: spotify.tobytes())
+        for speaker_id in ("left", "right", "other"):
+            target = Target(manager, Speaker(id=speaker_id, exposed=False), [group])
+            target.player = object()
+            manager.targets[speaker_id] = target
+        for speaker_id, left, right in (("left", 300, 300), ("right", 400, 400), ("other", 300, 400)):
+            with self.subTest(speaker=speaker_id):
+                result = np.frombuffer(manager.targets[speaker_id].render(0), dtype="<i2")
+                self.assertTrue(np.all(result[::2] == left))
+                self.assertTrue(np.all(result[1::2] == right))
+        group.spotify.playing = False
+        self.assertTrue(manager.targets["left"].active)
+        fallback = np.frombuffer(manager.targets["left"].render(1), dtype="<i2")
+        self.assertTrue(np.all(fallback == 100))
+        group.active = False
+        self.assertFalse(manager.targets["left"].active)
+
+    def test_individual_exposure_applies_to_both_inputs(self) -> None:
+        manager = object.__new__(Manager)
+        manager.spotify_enabled = True
+        manager.config = Config()
+        manager.registry = Registry()
+        manager.address = "127.0.0.1"
+        exposed = Target(manager, Speaker(id="solo"), [])
+        self.assertIsNotNone(exposed.spotify)
+        self.assertIsNone(Target(manager, Speaker(id="hidden", exposed=False), []).spotify)
+        self.assertIsNone(Target(manager, Speaker(id="left"), [], paired=True).spotify)
+        assert exposed.spotify is not None
+        exposed.spotify.playing = True
+        exposed.spotify._pcm.extend(np.full(CHUNK_SAMPLES, 250, dtype="<i2").tobytes())
+        self.assertTrue(exposed.active)
+        self.assertTrue(np.all(np.frombuffer(exposed.render(0), dtype="<i2") == 250))
+        exposed.input = Mock(read_pcm=lambda: np.full(CHUNK_SAMPLES, 100, dtype="<i2").tobytes())
+        exposed.playing = True
+        exposed.started_at = 10
+        exposed.spotify._pcm.extend(np.full(CHUNK_SAMPLES, 250, dtype="<i2").tobytes())
+        self.assertTrue(np.all(np.frombuffer(exposed.render(1), dtype="<i2") == 100))
+        self.assertEqual(len(exposed.spotify._pcm), 0)  # Losing pipe still drains.
+        exposed.playing = False
+        exposed.spotify._pcm.extend(np.full(CHUNK_SAMPLES, 250, dtype="<i2").tobytes())
+        self.assertTrue(np.all(np.frombuffer(exposed.render(2), dtype="<i2") == 250))
+
+
+class SpotifyNameTests(unittest.TestCase):
+    def test_names_are_unique_stable_and_fit_one_mdns_label(self) -> None:
+        from sendspin_bridge.app import _spotify_names
+
+        long = "Ñ" * 40  # 80 UTF-8 bytes.
+        registry = Registry(
+            speakers=[Speaker(id="a", exposed_name="Echo"), Speaker(id="b", exposed_name="Echo"),
+                      Speaker(id="hidden", exposed_name="Echo", exposed=False), Speaker(id="l", exposed_name="L"),
+                      Speaker(id="r", exposed_name="R"), Speaker(id="long", exposed_name=long)],
+            stereos=[Stereo("pair", "l", "r", exposed_name="Echo")],
+        )
+        names = _spotify_names(registry)
+        suffix = registry.exposed_suffix
+        self.assertEqual(names["stereo:pair"], "Echo" + suffix)
+        self.assertEqual(names["a"], "Echo" + suffix + " 2")
+        self.assertEqual(names["b"], "Echo" + suffix + " 3")
+        self.assertNotIn("hidden", names)
+        self.assertNotIn("l", names)
+        self.assertLessEqual(len(names["long"].encode()), 62)
+        self.assertTrue(names["long"].startswith("Ñ"))
+        self.assertEqual(names, _spotify_names(registry))
+
+
+class SpotifyNoSpeakerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_undiscovered_group_does_not_block_spotify_pipe(self) -> None:
+        manager = object.__new__(Manager)
+        manager.spotify_enabled = True
+        manager.config = Config()
+        manager.registry = Registry()
+        manager.address = "127.0.0.1"
+        manager.targets = {}
+        group = GroupTarget(manager, Group("home", speaker_ids=["missing"]))
+        assert group.spotify is not None
+        group.spotify.playing = True
+        group.spotify._pcm.extend(b"\x01" * (CHUNK_BYTES * 10))
+        manager.group_targets = {"home": group}
+        manager.stereo_targets = {}
+        manager.server = Mock(clock=Mock(now_us=lambda: 1000000))
+        manager.next_play_start_us = None
+        manager.playback_chunk = 0
+        task = asyncio.create_task(manager._pump_audio())
+        try:
+            await asyncio.sleep(0.06)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertLess(len(group.spotify._pcm), CHUNK_BYTES * 10)
 
 
 class VolumeFeedbackTests(unittest.IsolatedAsyncioTestCase):

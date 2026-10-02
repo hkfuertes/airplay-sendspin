@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ from .airplay import Advertiser, lan_ipv4, virtual_mac
 from .audio import CHUNK_FRAMES, CHUNK_MS, CHUNK_SAMPLES, GroupBuffer, chunk, mixed_bytes
 from .raop import FLUSH, PLAY, STOP, VOLUME, Receiver
 from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker, Stereo
+from .spotify import LIBRARY as SPOTIFY_LIBRARY, SpotifyInput
 from .web import ConfigWeb
 
 LOG = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class Config:
     server_name: str = "Sendspin Bridge"
     web_host: str = "0.0.0.0"
     web_port: int = 8080
+    spotify: bool = True
 
 
 class AirPlayInput:
@@ -127,21 +130,33 @@ class GroupTarget:
         self.group = group
         self.input = AirPlayInput(manager, key or f"group:{group.id}", group.exposed_name, group.port)
         self.buffer = GroupBuffer(self.input.read_pcm)
+        self.spotify = _spotify_input(manager, key or f"group:{group.id}", group.exposed_name)
+        self.spotify_buffer = GroupBuffer(self.spotify.read_pcm) if self.spotify is not None else None
+        if self.spotify is not None:
+            self.spotify.on_reset = self.spotify_buffer.reset
         self.channels: dict[str, tuple[int, str]] = {}
         for stereo in stereos or []:
             if stereo.left_id in group.speaker_ids and stereo.right_id in group.speaker_ids:
                 self.channels[stereo.left_id] = (0, stereo.right_id)
                 self.channels[stereo.right_id] = (1, stereo.left_id)
         self.active = False
+        self.started_at = 0
 
     async def start(self) -> None:
         await self.input.start()
+        if self.spotify is not None:
+            try:
+                await self.spotify.start()
+            except Exception:
+                LOG.exception("Spotify Connect input for %s failed; AirPlay remains available", self.group.id)
+                self.spotify = None
         LOG.info("AirPlay target %r (%s) -> %d speakers", self.group.exposed_name, self.group.id, len(self.group.speaker_ids))
 
     def handle_events(self) -> None:
         for event, volume in self.input.events() or ():
             if event == PLAY:
                 self.active = True
+                self.started_at = time.monotonic_ns()
                 self.buffer.reset()
             elif event == FLUSH:
                 self.buffer.reset()
@@ -151,15 +166,29 @@ class GroupTarget:
             elif event == VOLUME:
                 self.manager.set_group_volume(self.group.speaker_ids, _volume_percent(volume))
 
-    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int, speaker_id: str) -> None:
-        if self.active:
-            route = self.channels.get(speaker_id)
-            partner = self.manager.targets.get(route[1]) if route else None
-            # ponytail: when one side disconnects, the surviving device gets full audio.
-            channel = route[0] if partner is not None and partner.player is not None else None
-            self.buffer.mix_into(output, playback_chunk, delay_ms, channel)
+    @property
+    def playing(self) -> bool:
+        return self.active or (self.spotify is not None and self.spotify.playing)
+
+    def mix_into(self, output: np.ndarray, playback_chunk: int, delay_ms: int, speaker_id: str, *, spotify: bool = False) -> None:
+        if spotify:
+            if self.spotify is None or not self.spotify.playing:
+                return
+            assert self.spotify_buffer is not None
+            buffer = self.spotify_buffer
+        else:
+            if not self.active:
+                return
+            buffer = self.buffer
+        route = self.channels.get(speaker_id)
+        partner = self.manager.targets.get(route[1]) if route else None
+        # ponytail: when one side disconnects, the surviving device gets full audio.
+        channel = route[0] if partner is not None and partner.player is not None else None
+        buffer.mix_into(output, playback_chunk, delay_ms, channel)
 
     async def close(self) -> None:
+        if self.spotify is not None:
+            await self.spotify.close()
         await self.input.close()
 
 
@@ -172,9 +201,11 @@ class Target:
         self.groups = groups
         # Pair membership suspends only the individual AirPlay target; keep the stored preference for unpairing.
         self.input = AirPlayInput(manager, speaker.id, speaker.exposed_name, speaker.port) if speaker.exposed and not paired else None
+        self.spotify = _spotify_input(manager, speaker.id, speaker.exposed_name) if self.input is not None else None
         self.player = None
         self.stream = None
         self.playing = False
+        self.started_at = 0
         self.delay_ms = speaker.delay_ms or 0
         self.volume = 100
         self.remove_player_listener = None
@@ -182,6 +213,12 @@ class Target:
     async def start(self) -> None:
         if self.input is not None:
             await self.input.start()
+        if self.spotify is not None:
+            try:
+                await self.spotify.start()
+            except Exception:
+                LOG.exception("Spotify Connect input for %s failed; AirPlay remains available", self.speaker.id)
+                self.spotify = None
         LOG.info("AirPlay target %r (%s)", self.speaker.exposed_name, self.speaker.id)
 
     async def attach(self, player) -> None:
@@ -207,6 +244,7 @@ class Target:
         for event, volume in self.input.events() or ():
             if event == PLAY:
                 self.playing = True
+                self.started_at = time.monotonic_ns()
             elif event == FLUSH:
                 if self.stream is not None:
                     self.stream.clear()
@@ -218,14 +256,38 @@ class Target:
 
     @property
     def active(self) -> bool:
-        return self.playing or any(group.active for group in self.groups)
+        return self.playing or (self.spotify is not None and self.spotify.playing) or any(group.playing for group in self.groups)
 
     def render(self, playback_chunk: int) -> bytes:
         output = np.zeros(CHUNK_SAMPLES, dtype=np.int32)
+        discard = np.zeros_like(output)
+        sources = []
         if self.playing and self.input is not None:
-            output += chunk(self.input.read_pcm())
+            sources.append((self.started_at, (self, "airplay")))
+        if self.spotify is not None and self.spotify.playing:
+            sources.append((self.spotify.started_at, (self, "spotify")))
         for group in self.groups:
-            group.mix_into(output, playback_chunk, self.delay_ms, self.speaker.id)
+            if group.active:
+                sources.append((group.started_at, (group, "airplay")))
+            if group.spotify is not None and group.spotify.playing:
+                sources.append((group.spotify.started_at, (group, "spotify")))
+        winner = max(sources, key=lambda source: source[0])[1] if sources else None
+        # Read losing inputs too: they must remain in time (and go-librespot needs pipe backpressure).
+        if self.playing and self.input is not None:
+            pcm = self.input.read_pcm()
+            if winner == (self, "airplay"):
+                output += chunk(pcm)
+        if self.spotify is not None and self.spotify.playing:
+            pcm = self.spotify.read_pcm()
+            if winner == (self, "spotify"):
+                output += chunk(pcm)
+        for group in self.groups:
+            if group.active:
+                group.mix_into(output if winner == (group, "airplay") else discard,
+                               playback_chunk, self.delay_ms, self.speaker.id)
+            if group.spotify is not None and group.spotify.playing:
+                group.mix_into(output if winner == (group, "spotify") else discard,
+                               playback_chunk, self.delay_ms, self.speaker.id, spotify=True)
         return mixed_bytes(output)
 
     async def push(self, pcm: bytes, play_start_us: int) -> None:
@@ -253,6 +315,8 @@ class Target:
     async def close(self) -> None:
         self._stop_stream()
         self._remove_player_listener()
+        if self.spotify is not None:
+            await self.spotify.close()
         if self.input is not None:
             await self.input.close()
 
@@ -281,6 +345,7 @@ class Manager:
             raise ValueError("web port must be in 1..65535")
         self.config = config
         self.registry = Registry.load(config.config_path, config.port_base, config.port_range)
+        self.spotify_enabled = config.spotify and SPOTIFY_LIBRARY.exists()
         self.address = ""
         self.server: SendspinServer | None = None
         self.web: ConfigWeb | None = None
@@ -296,6 +361,8 @@ class Manager:
 
     async def start(self) -> None:
         self.address = lan_ipv4()
+        if self.config.spotify and not self.spotify_enabled:
+            LOG.warning("go-librespot library not found: Spotify targets disabled; AirPlay remains available")
         state_dir = Path(self.config.config_path).parent
         identity = _load_identity(state_dir / ".sendspin-identity")
         pairing_store = await FileServerPairingStore.open(state_dir / ".sendspin-pairings.json")
@@ -469,8 +536,13 @@ class Manager:
                     target.handle_events()
                 for target in self.targets.values():
                     target.handle_events()
-                active = [target for target in self.targets.values() if target.player is not None and target.active]
-                if not active:
+                active = [target for target in self.targets.values() if target.active]
+                # Keep decoding at real time even with no connected players: pipe backpressure
+                # must not freeze go-librespot's playback and Connect controls.
+                orphans = [group for group in (*self.stereo_targets.values(), *self.group_targets.values())
+                           if group.spotify is not None and group.spotify.playing
+                           and not any(speaker_id in self.targets for speaker_id in group.group.speaker_ids)]
+                if not active and not orphans:
                     self.next_play_start_us = None
                     next_tick = loop.time()
                     await asyncio.sleep(0.01)
@@ -482,7 +554,9 @@ class Manager:
                 play_start_us = self.next_play_start_us
                 self.next_play_start_us += CHUNK_MS * 1_000
                 payloads = [(target, target.render(self.playback_chunk)) for target in active]
-                await asyncio.gather(*(target.push(pcm, play_start_us) for target, pcm in payloads))
+                for group in orphans:
+                    group.spotify.read_pcm()
+                await asyncio.gather(*(target.push(pcm, play_start_us) for target, pcm in payloads if target.player is not None))
                 self.playback_chunk += 1
                 next_tick += CHUNK_MS / 1_000
                 await asyncio.sleep(max(0, next_tick - loop.time()))
@@ -501,6 +575,36 @@ class Manager:
             return None
         parts = urlsplit(url)
         return Endpoint(host=parts.hostname or "", port=parts.port or 0, path=parts.path).normalized()
+
+
+def _spotify_input(manager: Manager, key: str, name: str) -> SpotifyInput | None:
+    if getattr(manager, "spotify_enabled", False) is not True:
+        return None
+    name = _spotify_names(manager.registry).get(key, _mdns_label(name + manager.registry.exposed_suffix))
+    return SpotifyInput(key, name, Path(manager.config.config_path).parent, manager.address)
+
+
+def _spotify_names(registry: Registry) -> dict[str, str]:
+    """Connect device IDs derive from the name (as librespot did): keep names unique, stable and mDNS-safe."""
+    paired = {member for pair in registry.stereos() for member in (pair.left_id, pair.right_id)}
+    targets = [(f"group:{group.id}", group.exposed_name) for group in registry.groups()]
+    targets += [(f"stereo:{pair.id}", pair.exposed_name) for pair in registry.stereos()]
+    targets += [(speaker.id, speaker.exposed_name) for speaker in registry.speakers()
+                if speaker.exposed and speaker.id not in paired]
+    names: dict[str, str] = {}
+    for key, name in targets:
+        name += registry.exposed_suffix
+        candidate, count = _mdns_label(name), 1
+        while candidate in names.values():
+            count += 1
+            candidate = _mdns_label(name, f" {count}")
+        names[key] = candidate
+    return names
+
+
+def _mdns_label(name: str, tag: str = "") -> str:
+    # libmdns panics unless the advertised name fits one DNS label (< 63 bytes).
+    return name.encode()[:62 - len(tag.encode())].decode(errors="ignore") + tag
 
 
 def _volume_percent(volume: float) -> int:

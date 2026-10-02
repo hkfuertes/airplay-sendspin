@@ -6,3 +6,5 @@ __pycache__/
 *.py[cod]
 frontend/node_modules/
 out/
+third_party/
+src/sendspin_bridge/libgolibrespot.*

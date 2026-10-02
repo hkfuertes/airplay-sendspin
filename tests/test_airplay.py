@@ -25,6 +25,15 @@ class AdvertiserTests(unittest.TestCase):
             zeroconf.async_unregister_service.assert_awaited_once_with(info)
             zeroconf.async_close.assert_awaited_once()
 
+    def test_other_service_types_use_plain_instance_and_own_txt(self) -> None:
+        advertiser = Advertiser("Echo", b"\x02\x00\x00\x00\x00\x02", "192.0.2.1", 4070,
+                                "_spotify-connect._tcp.local.", {"VERSION": "1.0", "CPath": "/"})
+        info = advertiser._info
+        assert info is not None
+        self.assertEqual(info.name, "Echo._spotify-connect._tcp.local.")
+        self.assertEqual(info.port, 4070)
+        self.assertEqual(info.properties, {b"VERSION": b"1.0", b"CPath": b"/"})
+
 
 if __name__ == "__main__":
     unittest.main()
