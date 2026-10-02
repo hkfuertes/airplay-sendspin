@@ -6,14 +6,19 @@ import asyncio
 import hashlib
 import logging
 import os
+import socket
 import tempfile
 import time
 from pathlib import Path
 from collections.abc import Callable
 
+from .airplay import Advertiser, virtual_mac
 from .audio import CHUNK_BYTES, CHUNK_FRAMES
 
 LOG = logging.getLogger(__name__)
+# librespot is patched with an "external" zeroconf backend; the bridge publishes this record itself.
+SPOTIFY_TYPE = "_spotify-connect._tcp.local."
+SPOTIFY_PROPERTIES = {"VERSION": "1.0", "CPath": "/"}
 # ponytail: 500 ms of PCM; block the pipe reader at this limit so librespot cannot decode ahead.
 MAX_PCM_BYTES = CHUNK_BYTES * 25
 
@@ -34,6 +39,7 @@ class SpotifyInput:
         self.playing = False
         self.started_at = 0
         self.process: asyncio.subprocess.Process | None = None
+        self._advertiser: Advertiser | None = None
         self._pcm = bytearray()
         self._space = asyncio.Event()
         self._space.set()
@@ -55,14 +61,19 @@ class SpotifyInput:
         asyncio.get_running_loop().add_reader(self._fifo, self._read_events)
         env = os.environ.copy()
         env["SENDSPIN_EVENT_FIFO"] = fifo_path
+        port = _free_port()
         try:
             self.process = await asyncio.create_subprocess_exec(
                 self.binary, "--name", self.name, "--backend", "pipe",
                 "--format", "S16", "--initial-volume", "100", "--system-cache", str(cache),
-                "--zeroconf-interface", self.address,
+                "--zeroconf-backend", "external", "--zeroconf-port", str(port),
                 "--onevent", str(Path(__file__).with_name("spotify_event.sh")), "--quiet",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
             )
+            self._advertiser = Advertiser(
+                self.name, virtual_mac(f"spotify:{self.key}"), self.address, port, SPOTIFY_TYPE, SPOTIFY_PROPERTIES,
+            )
+            await self._advertiser.start()
         except BaseException:
             await self.close()
             raise
@@ -117,6 +128,8 @@ class SpotifyInput:
             self._pcm.clear()
             if not self._closing:
                 LOG.warning("Spotify Connect target %s exited", self.key)
+                if self._advertiser is not None:
+                    await self._advertiser.close()  # Don't advertise a dead pairing endpoint.
 
     async def _read_logs(self) -> None:
         assert self.process is not None and self.process.stderr is not None
@@ -128,6 +141,9 @@ class SpotifyInput:
         self.playing = False
         self._pcm.clear()
         self._space.set()
+        if self._advertiser is not None:
+            await self._advertiser.close()
+            self._advertiser = None
         if self.process is not None:
             if self.process.returncode is None:
                 self.process.terminate()
@@ -148,3 +164,10 @@ class SpotifyInput:
         if self._temp is not None:
             self._temp.cleanup()
             self._temp = None
+
+
+def _free_port() -> int:
+    # ponytail: librespot binds after this probe closes; a port taken in between only fails this target.
+    with socket.socket() as probe:
+        probe.bind(("", 0))
+        return probe.getsockname()[1]

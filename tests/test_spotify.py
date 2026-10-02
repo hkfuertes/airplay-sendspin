@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from sendspin_bridge.audio import CHUNK_BYTES
-from sendspin_bridge.spotify import MAX_PCM_BYTES, SpotifyInput
+from sendspin_bridge.spotify import MAX_PCM_BYTES, SPOTIFY_TYPE, SpotifyInput
 
 
 class SpotifyTests(unittest.IsolatedAsyncioTestCase):
@@ -56,10 +56,17 @@ class SpotifyTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
-    async def test_launch_uses_distinct_private_caches_and_bounded_pipe(self) -> None:
+    async def test_launch_uses_distinct_private_caches_and_bridge_mdns(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             proc = Mock(returncode=0, stdout=Mock(read=AsyncMock(return_value=b"")), stderr=Mock(readline=AsyncMock(return_value=b"")))
-            with patch("sendspin_bridge.spotify.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as spawn:
+            advertisers: list[Mock] = []
+
+            def advertise(*args):
+                advertisers.append(Mock(args=args, start=AsyncMock(), close=AsyncMock()))
+                return advertisers[-1]
+
+            with patch("sendspin_bridge.spotify.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as spawn, \
+                    patch("sendspin_bridge.spotify.Advertiser", side_effect=advertise):
                 first = SpotifyInput("librespot", "group:home", "Home", Path(temp), "127.0.0.1")
                 second = SpotifyInput("librespot", "stereo:pair", "Pair", Path(temp), "127.0.0.1")
                 try:
@@ -71,9 +78,17 @@ class SpotifyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(a.args[a.args.index("--format") + 1], "S16")
                     self.assertEqual(a.kwargs["stdout"], asyncio.subprocess.PIPE)
                     self.assertNotEqual(a.kwargs["env"]["SENDSPIN_EVENT_FIFO"], b.kwargs["env"]["SENDSPIN_EVENT_FIFO"])
+                    # librespot only serves pairing; the bridge publishes its mDNS record.
+                    self.assertEqual(a.args[a.args.index("--zeroconf-backend") + 1], "external")
+                    name, _mac, address, port, service_type, _properties = advertisers[0].args
+                    self.assertEqual((name, address, service_type), ("Home", "127.0.0.1", SPOTIFY_TYPE))
+                    self.assertEqual(str(port), a.args[a.args.index("--zeroconf-port") + 1])
+                    advertisers[0].start.assert_awaited_once()
                 finally:
                     await first.close()
                     await second.close()
+            for advertiser in advertisers:
+                advertiser.close.assert_awaited()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,9 @@ stops, the previous active input resumes. Stereo routing, group membership
 and per-speaker sync offsets apply to both protocols. Spotify names match the
 AirPlay names; librespot derives the Connect identity from the name, so duplicate
 names get a numeric suffix (` 2`) and names are capped at 62 bytes for mDNS.
+librespot is built with a small patch (`patches/librespot`) that adds an
+`external` zeroconf backend: it only serves the pairing endpoint, and the bridge
+publishes `_spotify-connect._tcp` with python-zeroconf, like the AirPlay records.
 A **Spotify Premium** account is required.
 Select the destination in Spotify on the trusted LAN; librespot stores reusable
 credentials under `state/spotify/` (or next to `config.xml` in the add-on), in
@@ -157,5 +160,7 @@ merging and remain responsible for releases, security, and support.
   Python Sendspin protocol implementation, sessions, audio conversion, and
   discovery.
 - [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf)
-  provides local multicast DNS advertisement for AirPlay.
+  provides local multicast DNS advertisement for AirPlay and Spotify Connect.
+- [librespot](https://github.com/librespot-org/librespot) provides the Spotify
+  Connect receiver and PCM output.
 - [Home Assistant](https://www.home-assistant.io/) provides the add-on platform.
