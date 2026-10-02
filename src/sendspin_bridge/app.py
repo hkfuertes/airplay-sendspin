@@ -6,7 +6,6 @@ import asyncio
 import logging
 import math
 import os
-import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +28,7 @@ from .airplay import Advertiser, lan_ipv4, virtual_mac
 from .audio import CHUNK_FRAMES, CHUNK_MS, CHUNK_SAMPLES, GroupBuffer, chunk, mixed_bytes
 from .raop import FLUSH, PLAY, STOP, VOLUME, Receiver
 from .registry import Endpoint, Group, INBOUND, OUTBOUND, Registry, Speaker, Stereo
-from .spotify import SpotifyInput
+from .spotify import LIBRARY as SPOTIFY_LIBRARY, SpotifyInput
 from .web import ConfigWeb
 
 LOG = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ class Config:
     server_name: str = "Sendspin Bridge"
     web_host: str = "0.0.0.0"
     web_port: int = 8080
-    spotify_bin: str = "librespot"
+    spotify: bool = True
 
 
 class AirPlayInput:
@@ -273,7 +272,7 @@ class Target:
             if group.spotify is not None and group.spotify.playing:
                 sources.append((group.spotify.started_at, (group, "spotify")))
         winner = max(sources, key=lambda source: source[0])[1] if sources else None
-        # Read losing inputs too: they must remain in time (and librespot needs pipe backpressure).
+        # Read losing inputs too: they must remain in time (and go-librespot needs pipe backpressure).
         if self.playing and self.input is not None:
             pcm = self.input.read_pcm()
             if winner == (self, "airplay"):
@@ -346,7 +345,7 @@ class Manager:
             raise ValueError("web port must be in 1..65535")
         self.config = config
         self.registry = Registry.load(config.config_path, config.port_base, config.port_range)
-        self.spotify_binary = shutil.which(config.spotify_bin) if config.spotify_bin else None
+        self.spotify_enabled = config.spotify and SPOTIFY_LIBRARY.exists()
         self.address = ""
         self.server: SendspinServer | None = None
         self.web: ConfigWeb | None = None
@@ -362,8 +361,8 @@ class Manager:
 
     async def start(self) -> None:
         self.address = lan_ipv4()
-        if self.config.spotify_bin and self.spotify_binary is None:
-            LOG.warning("librespot not found: Spotify targets disabled; AirPlay remains available")
+        if self.config.spotify and not self.spotify_enabled:
+            LOG.warning("go-librespot library not found: Spotify targets disabled; AirPlay remains available")
         state_dir = Path(self.config.config_path).parent
         identity = _load_identity(state_dir / ".sendspin-identity")
         pairing_store = await FileServerPairingStore.open(state_dir / ".sendspin-pairings.json")
@@ -539,7 +538,7 @@ class Manager:
                     target.handle_events()
                 active = [target for target in self.targets.values() if target.active]
                 # Keep decoding at real time even with no connected players: pipe backpressure
-                # must not freeze librespot's playback and Connect controls.
+                # must not freeze go-librespot's playback and Connect controls.
                 orphans = [group for group in (*self.stereo_targets.values(), *self.group_targets.values())
                            if group.spotify is not None and group.spotify.playing
                            and not any(speaker_id in self.targets for speaker_id in group.group.speaker_ids)]
@@ -579,15 +578,14 @@ class Manager:
 
 
 def _spotify_input(manager: Manager, key: str, name: str) -> SpotifyInput | None:
-    binary = getattr(manager, "spotify_binary", None)
-    if not isinstance(binary, str):
+    if getattr(manager, "spotify_enabled", False) is not True:
         return None
     name = _spotify_names(manager.registry).get(key, _mdns_label(name + manager.registry.exposed_suffix))
-    return SpotifyInput(binary, key, name, Path(manager.config.config_path).parent, manager.address)
+    return SpotifyInput(key, name, Path(manager.config.config_path).parent, manager.address)
 
 
 def _spotify_names(registry: Registry) -> dict[str, str]:
-    """librespot derives the Connect device ID from its name: keep names unique, stable and mDNS-safe."""
+    """Connect device IDs derive from the name (as librespot did): keep names unique, stable and mDNS-safe."""
     paired = {member for pair in registry.stereos() for member in (pair.left_id, pair.right_id)}
     targets = [(f"group:{group.id}", group.exposed_name) for group in registry.groups()]
     targets += [(f"stereo:{pair.id}", pair.exposed_name) for pair in registry.stereos()]

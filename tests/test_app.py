@@ -135,7 +135,7 @@ class StereoRoutingTests(unittest.TestCase):
 class SpotifyRoutingTests(unittest.TestCase):
     def test_spotify_and_airplay_stay_active_on_the_same_pair_and_group(self) -> None:
         manager = object.__new__(Manager)
-        manager.spotify_binary = "librespot"
+        manager.spotify_enabled = True
         manager.config = Config()
         manager.registry = Registry()
         manager.address = "127.0.0.1"
@@ -171,7 +171,7 @@ class SpotifyRoutingTests(unittest.TestCase):
 
     def test_individual_exposure_applies_to_both_inputs(self) -> None:
         manager = object.__new__(Manager)
-        manager.spotify_binary = "librespot"
+        manager.spotify_enabled = True
         manager.config = Config()
         manager.registry = Registry()
         manager.address = "127.0.0.1"
@@ -221,7 +221,7 @@ class SpotifyNameTests(unittest.TestCase):
 class SpotifyNoSpeakerTests(unittest.IsolatedAsyncioTestCase):
     async def test_undiscovered_group_does_not_block_spotify_pipe(self) -> None:
         manager = object.__new__(Manager)
-        manager.spotify_binary = "librespot"
+        manager.spotify_enabled = True
         manager.config = Config()
         manager.registry = Registry()
         manager.address = "127.0.0.1"

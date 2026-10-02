@@ -22,4 +22,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-sendspin_bridge = ["_raop.*", "web/*", "spotify_event.sh"]
+sendspin_bridge = ["_raop.*", "web/*", "libgolibrespot.so"]
