@@ -101,7 +101,7 @@ class SpotifyInput:
             self._events = bytearray(remainder)
             event = raw.decode("ascii", errors="replace")
             if event in ("paused", "stopped", "seeked", "playing"):
-                self._pcm.clear()
+                self._drop_whole_frames()
                 self._space.set()
                 if self.on_reset is not None:
                     self.on_reset()
@@ -121,8 +121,9 @@ class SpotifyInput:
                 data = await self.process.stdout.read(min(CHUNK_BYTES * 4, MAX_PCM_BYTES - len(self._pcm)))
                 if not data:
                     break
-                if self.playing:
-                    self._pcm.extend(data)
+                self._pcm.extend(data)
+                if not self.playing:
+                    self._drop_whole_frames()
         finally:
             self.playing = False
             self._pcm.clear()
@@ -130,6 +131,11 @@ class SpotifyInput:
                 LOG.warning("Spotify Connect target %s exited", self.key)
                 if self._advertiser is not None:
                     await self._advertiser.close()  # Don't advertise a dead pairing endpoint.
+
+    def _drop_whole_frames(self) -> None:
+        # librespot's stdout is line-buffered, so pipe reads split frames anywhere; dropping a
+        # partial frame would shift every later sample (heard as noise). Keep the partial tail.
+        del self._pcm[: len(self._pcm) // 4 * 4]
 
     async def _read_logs(self) -> None:
         assert self.process is not None and self.process.stderr is not None

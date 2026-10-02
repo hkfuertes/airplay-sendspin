@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from sendspin_bridge.audio import CHUNK_BYTES
+import numpy as np
+
+from sendspin_bridge.audio import CHUNK_BYTES, CHUNK_FRAMES, CHUNK_SAMPLES
 from sendspin_bridge.spotify import MAX_PCM_BYTES, SPOTIFY_TYPE, SpotifyInput
 
 
@@ -55,6 +57,38 @@ class SpotifyTests(unittest.IsolatedAsyncioTestCase):
                 source._closing = True
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+    async def test_dropping_pcm_on_events_keeps_frames_aligned(self) -> None:
+        # librespot's stdout is line-buffered: pipe reads split S16 stereo frames anywhere.
+        frames = np.arange(4 * CHUNK_FRAMES, dtype="<i2")
+        stream = np.column_stack((frames, -frames)).astype("<i2").tobytes()  # L = k, R = -k.
+        for event, playing in (("playing", False), ("seeked", True), ("paused", True)):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
+                source = SpotifyInput("librespot", "solo", "Solo", Path(temp), "127.0.0.1")
+                source.playing = playing
+                reader = asyncio.StreamReader()
+                source.process = Mock(stdout=reader)
+                source._fifo, write_fd = os.pipe()
+                task = asyncio.create_task(source._read_audio())
+                try:
+                    reader.feed_data(stream[:1001])  # Not a whole number of frames.
+                    await asyncio.sleep(0.01)
+                    os.write(write_fd, f"{event}\n".encode())
+                    source._read_events()
+                    source.playing = True  # Resume after pause.
+                    reader.feed_data(stream[1001:])
+                    await asyncio.sleep(0.01)
+                    pcm = np.frombuffer(source.read_pcm(), dtype="<i2")
+                    self.assertEqual(len(pcm), CHUNK_SAMPLES)
+                    self.assertTrue(np.all(pcm[0::2] == -pcm[1::2]), "L/R pairs shifted")
+                    self.assertTrue(np.all(np.diff(pcm[0::2]) == 1), "frames not contiguous")
+                finally:
+                    source._closing = True
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    os.close(source._fifo)
+                    os.close(write_fd)
+                    source._fifo = None
 
     async def test_launch_uses_distinct_private_caches_and_bridge_mdns(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
