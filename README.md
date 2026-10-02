@@ -3,7 +3,8 @@
 AirPlay 1 targets for Sendspin speakers, stereo pairs and groups. By default,
 every unpaired discovered speaker gets its own target; pairing two speakers
 replaces their individual targets with one stereo destination. AirPlay PCM stays
-local: libraop decodes it, then the bridge sends it to Sendspin sessions.
+local: libraop decodes it, then the bridge sends it to Sendspin sessions. Spotify
+Connect can feed the same destinations via librespot's PCM pipe.
 
 ## Docker / homelab
 
@@ -15,7 +16,28 @@ docker compose up -d
 # The image build compiles the libraop CFFI extension and runs Python tests.
 ```
 
-Host networking is required for mDNS and AirPlay discovery.
+Host networking is required for mDNS, AirPlay and Spotify Connect discovery.
+The first image build also compiles librespot (Rust), which takes longer.
+
+## Spotify Connect
+
+A Spotify Connect target is advertised alongside each exposed unpaired speaker,
+stereo pair and group. Both AirPlay and Spotify remain available. When multiple
+inputs play to a speaker, the last one to start wins for that speaker; if it
+stops, the previous active input resumes. Stereo routing, group membership
+and per-speaker sync offsets apply to both protocols. Target names include their stable config ID to keep
+Spotify device identities distinct. A **Spotify Premium** account is required.
+Select the destination in Spotify on the trusted LAN; librespot stores reusable
+credentials under `state/spotify/` (or next to `config.xml` in the add-on), in
+private per-target directories. Do not expose the Spotify pairing ports or the
+configuration API outside the trusted LAN.
+
+Spotify's volume slider adjusts its own PCM. The dashboard's live
+speaker/group volume adjusts the physical Sendspin players; these two controls
+are independent (the dashboard cannot push volume back to Spotify). Renaming a
+Spotify target changes its Connect identity; reconnect it from Spotify if needed.
+Without the `librespot` binary the AirPlay bridge still works, but Spotify targets
+are unavailable. `-spotify-bin ''` disables them explicitly when running locally.
 
 ## Visual configuration
 
@@ -110,8 +132,9 @@ source is checked in.
   choice. The bridge mixes local S16 PCM on a shared 20 ms grid and gives every
   member the same Sendspin timestamp, routing left/right only for paired members.
   Unpaired exposed members stay advertised on their own; paired members are not
-  advertised individually but remain connected. An unpaired speaker can mix its
-  own target and group; paired speakers can mix their stereo and group targets. Group volume moves the members' average and keeps their
+  advertised individually but remain connected. Speakers can receive individual,
+  stereo and group targets; if several play, the most recently started input wins
+  on each speaker. Group volume moves the members' average and keeps their
   differences; at 0 or 100 every member ends up equal. During playback,
   dashboard volume changes are reported to the AirPlay sender via DACP when
   available: one level for the active individual target or group, never its

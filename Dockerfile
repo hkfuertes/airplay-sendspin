@@ -7,6 +7,15 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
+# librespot is Rust; its pipe backend yields PCM directly, without a C shim.
+FROM rust:1.90-bookworm AS spotify-build
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /spotify
+RUN git clone --quiet --branch v0.8.0 --depth 1 https://github.com/librespot-org/librespot.git . \
+ && cargo build --locked --release --bin librespot --no-default-features \
+      --features rustls-tls-webpki-roots,with-libmdns
+
 FROM python:3.13-bookworm AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -59,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /install /usr/local
+COPY --from=spotify-build /spotify/target/release/librespot /usr/local/bin/librespot
 RUN python -m sendspin_bridge -h >/dev/null
 
 CMD ["python", "-m", "sendspin_bridge", "-config", "/data/config.xml"]
